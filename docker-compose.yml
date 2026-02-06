@@ -1,0 +1,19 @@
+services:
+  engine:
+    build: ./engine
+    ports:
+      - "${ENGINE_PORT:-8000}:8000"
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+    working_dir: /app
+
+  web:
+    build: ./web
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    env_file: .env
+    environment:
+      - ENGINE_URL=http://engine:8000
+    depends_on:
+      - engine

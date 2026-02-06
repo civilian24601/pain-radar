@@ -1,0 +1,31 @@
+[project]
+name = "pain-radar-engine"
+version = "0.1.0"
+description = "Pain Radar research engine"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.34.0",
+    "pydantic>=2.10.0",
+    "pydantic-settings>=2.7.0",
+    "httpx>=0.28.0",
+    "anthropic>=0.43.0",
+    "openai>=1.60.0",
+    "beautifulsoup4>=4.12.0",
+    "duckduckgo-search>=7.0.0",
+    "aiosqlite>=0.20.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.8.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

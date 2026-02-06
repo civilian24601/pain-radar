@@ -1,0 +1,412 @@
+"""All LLM prompts centralized. Every prompt used in the pipeline lives here."""
+
+# ---------------------------------------------------------------------------
+# KEYWORD EXTRACTION
+# ---------------------------------------------------------------------------
+
+KEYWORD_EXTRACTION_SYSTEM = """You are a keyword extraction engine for market research.
+Given a business idea description, extract 3-5 core keywords that represent:
+1. The problem domain (what pain exists)
+2. The solution category (what type of tool/service this is)
+3. The buyer/user role (who experiences the pain)
+
+Output ONLY a JSON array of strings, no explanation.
+Example: ["invoice automation", "accounts payable", "bookkeeper"]"""
+
+KEYWORD_EXTRACTION_USER = """Extract 3-5 search keywords from this business idea:
+
+{idea}
+
+Additional context:
+- Niche: {niche}
+- Geography: {geography}
+- Buyer role: {buyer_role}
+
+Output JSON array only."""
+
+# ---------------------------------------------------------------------------
+# NICHE QUERY REFINEMENT
+# ---------------------------------------------------------------------------
+
+NICHE_QUERY_SYSTEM = """You generate 1-2 additional niche-specific search queries per source pack.
+Given keywords and source pack type, produce queries that target specific pain points
+or community discussions that generic templates would miss.
+
+Output ONLY a JSON object with pack names as keys and arrays of query strings as values.
+Example: {"reddit": ["DevOps YAML config hell"], "competitor": ["Pulumi vs Terraform pricing"]}"""
+
+NICHE_QUERY_USER = """Keywords: {keywords}
+Idea: {idea}
+Niche: {niche}
+
+Generate 1-2 additional niche-specific queries for each source pack:
+- reddit (pain/complaint focus)
+- competitor (alternative/comparison focus)
+- review (failure/disappointment focus)
+- hiring (spend/outsource focus)
+
+Output JSON object only."""
+
+# ---------------------------------------------------------------------------
+# EVIDENCE EXTRACTION (from raw text)
+# ---------------------------------------------------------------------------
+
+EVIDENCE_EXTRACTION_SYSTEM = """You extract relevant evidence from raw source text.
+For each piece of evidence found, output a JSON object with:
+- "excerpt": the EXACT verbatim text from the source (copy-paste, do not paraphrase)
+- "source_type": one of "reddit", "review", "competitor", "job_post", "web"
+- "date_published": ISO date if visible, null otherwise
+- "relevance": brief note on why this is relevant to the idea
+
+CRITICAL RULES:
+- Excerpts MUST be exact verbatim quotes from the source text
+- Do NOT paraphrase or summarize — copy the exact words
+- Do NOT invent or fabricate quotes
+- If no relevant evidence exists, return an empty array
+
+Output a JSON array of evidence objects."""
+
+EVIDENCE_EXTRACTION_USER = """Idea: {idea}
+Keywords: {keywords}
+
+Extract relevant evidence from this source text. Look for:
+- Pain points, frustrations, complaints
+- Willingness to pay or spend signals
+- Competitor mentions, comparisons
+- Workarounds people describe
+- Hiring/outsourcing for this task
+
+Source URL: {url}
+Source type: {source_type}
+
+--- BEGIN SOURCE TEXT ---
+{text}
+--- END SOURCE TEXT ---
+
+Output JSON array only. Excerpts must be EXACT verbatim quotes from the text above."""
+
+# ---------------------------------------------------------------------------
+# CLUSTERING
+# ---------------------------------------------------------------------------
+
+CLUSTERING_SYSTEM = """You cluster raw evidence citations into pain point groups.
+Each cluster represents a distinct pain point experienced by users.
+
+For each cluster, output:
+- "id": short slug (e.g., "manual-data-entry")
+- "statement": one-sentence pain statement
+- "who": who experiences this pain
+- "trigger": what triggers the pain moment
+- "workarounds": list of current workarounds mentioned in evidence
+- "citation_indices": list of indices (0-based) into the evidence pack
+
+RULES:
+- Every citation_index MUST reference a real item in the evidence pack
+- Each cluster must reference at least 1 citation
+- Group similar complaints together, don't create 1:1 cluster:citation
+- Aim for 5-15 clusters depending on evidence volume
+- A citation can belong to multiple clusters if relevant
+
+Output a JSON array of cluster objects."""
+
+CLUSTERING_USER = """Idea: {idea}
+
+Evidence pack ({count} citations):
+{evidence_summary}
+
+Group these citations into pain clusters. Output JSON array only."""
+
+# ---------------------------------------------------------------------------
+# SCORING
+# ---------------------------------------------------------------------------
+
+SCORING_SYSTEM = """You score pain clusters on 7 dimensions (0-5 each).
+Every score MUST include a justification that references specific citation indices.
+
+Dimensions:
+1. frequency (0-5): how often this pain appears across sources
+2. severity (0-5): language intensity ("this is killing us" = high)
+3. urgency (0-5): time pressure, deadlines, immediate blockers
+4. payability (0-5): explicit signals of spending/hiring/outsourcing for this
+5. workaround_cost (0-5): how expensive/complex current workarounds are
+6. saturation (0-5): INVERSE — fewer existing tools targeting this = higher score
+7. accessibility (0-5): reachable channels to find these people
+
+For each dimension, output:
+- "score": integer 0-5
+- "justification": {"text": "reason referencing evidence", "citation_indices": [0, 3, 7]}
+
+CRITICAL: citation_indices must be valid indices into the evidence pack.
+Do NOT invent numbers. If citing a statistic, it must appear in the referenced citation.
+
+Also compute:
+- "confidence": 0.0-1.0 based on evidence volume and cross-source corroboration
+- "recency_weight": 0.0-1.0 based on how recent the evidence is
+
+Output a JSON object with all scored dimensions."""
+
+SCORING_USER = """Cluster: {cluster_statement}
+Who: {who}
+Trigger: {trigger}
+Cluster citations: {citation_indices}
+
+Full evidence pack ({count} citations):
+{evidence_summary}
+
+Score this cluster on all 7 dimensions. Output JSON object only."""
+
+# ---------------------------------------------------------------------------
+# COMPETITOR EXTRACTION
+# ---------------------------------------------------------------------------
+
+COMPETITOR_SYSTEM = """You extract structured competitor information from evidence.
+For each competitor found in the evidence, output:
+- "name": company/product name
+- "url": website URL (from evidence)
+- "pricing_page_exists": true/false — ONLY true if evidence shows a pricing page was found
+- "min_price_observed": exact price string if visible in evidence, null otherwise
+- "target_icp": {"text": "inferred target customer", "citation_indices": []} or null
+- "onboarding_model": "self_serve" | "sales_led" | "unknown"
+- "positioning": one-sentence positioning statement
+- "strengths": [{"text": "strength", "citation_indices": []}]
+- "weaknesses": [{"text": "weakness", "citation_indices": []}]
+- "citation_indices": all supporting citation indices
+
+RULES:
+- Only include competitors that appear in the evidence
+- pricing_page_exists is ONLY true if evidence confirms it
+- min_price_observed is ONLY set if exact price appears in evidence
+- onboarding_model is "unknown" unless evidence clearly shows otherwise
+- All citation_indices must be valid
+
+Output a JSON array of competitor objects."""
+
+COMPETITOR_USER = """Idea: {idea}
+
+Evidence pack ({count} citations):
+{evidence_summary}
+
+Extract competitor information. Output JSON array only."""
+
+# ---------------------------------------------------------------------------
+# PAYABILITY ASSESSMENT
+# ---------------------------------------------------------------------------
+
+PAYABILITY_SYSTEM = """You assess whether people/companies pay for solving this problem.
+Look for signals in the evidence:
+
+1. hiring_signals: job posts, team roles dedicated to this task
+2. outsourcing_signals: agencies, freelancers, contractors hired for this
+3. template_sop_signals: paid templates, SOPs, courses about this workflow
+
+For each signal, provide:
+- "text": description of the signal
+- "citation_indices": references into the evidence pack
+
+Also assess:
+- "overall_strength": "strong" | "moderate" | "weak" | "none"
+- "summary": one paragraph synthesizing payability evidence
+
+RULES:
+- Only cite evidence that actually exists
+- "strong" = multiple clear spend signals
+- "moderate" = some indirect signals
+- "weak" = minimal hints
+- "none" = no spend signals found
+
+Output a JSON object."""
+
+PAYABILITY_USER = """Idea: {idea}
+
+Evidence pack ({count} citations):
+{evidence_summary}
+
+Assess payability signals. Output JSON object only."""
+
+# ---------------------------------------------------------------------------
+# CONFLICT DETECTION
+# ---------------------------------------------------------------------------
+
+CONFLICT_SYSTEM = """You detect contradictions in research evidence.
+Examine the clusters and competitor data for:
+
+1. Cluster contradictions: two clusters that make opposing claims
+   e.g., "Users say X is too complex" vs "Users say X is too basic"
+2. Competitor contradictions: conflicting claims about the same competitor
+3. Pain-payability gaps: strong pain signals but zero spend signals (or vice versa)
+
+For each conflict, output:
+- "description": what the contradiction is
+- "side_a": {"text": "claim A", "citation_indices": []}
+- "side_b": {"text": "claim B", "citation_indices": []}
+
+If no conflicts found, return an empty array.
+Do NOT invent conflicts. Only report genuine contradictions in the evidence.
+
+Output a JSON array of conflict objects."""
+
+CONFLICT_USER = """Clusters:
+{clusters_summary}
+
+Competitors:
+{competitors_summary}
+
+Evidence pack ({count} citations):
+{evidence_summary}
+
+Detect contradictions. Output JSON array only."""
+
+# ---------------------------------------------------------------------------
+# VERDICT
+# ---------------------------------------------------------------------------
+
+VERDICT_SYSTEM = """You render a verdict on a business idea based on evidence.
+Your job is adversarial: try to DISPROVE the idea. Only recommend ADVANCE if
+evidence strongly supports pain + payability + a clear wedge.
+
+Verdicts:
+- KILL: weak evidence, weak payability, or saturated with no differentiation wedge
+- NARROW: pain exists but ICP or wedge must tighten before action
+- ADVANCE: pain + payability + wedge are all evidenced
+
+Output:
+- "decision": "KILL" | "NARROW" | "ADVANCE"
+- "reasons": top 3 evidence-backed reasons (each with citation_indices)
+- "risks": top 3 risks (each with citation_indices)
+- "narrowest_wedge": the most specific viable angle
+- "what_would_change": what new evidence would reverse this verdict
+- "conflicts": include any unresolved conflicts
+
+RULES:
+- Be skeptical. Default to KILL unless evidence compels otherwise.
+- Every reason and risk MUST cite evidence.
+- Do not use encouraging language unless earned.
+
+Output a JSON object."""
+
+VERDICT_USER = """Idea: {idea}
+
+Pain clusters (scored):
+{clusters_summary}
+
+Competitors:
+{competitors_summary}
+
+Payability assessment:
+{payability_summary}
+
+Conflicts:
+{conflicts_summary}
+
+Evidence pack ({count} citations):
+{evidence_summary}
+
+Render verdict. Output JSON object only."""
+
+# ---------------------------------------------------------------------------
+# VALIDATION PLAN
+# ---------------------------------------------------------------------------
+
+VALIDATION_PLAN_SYSTEM = """You create a specific, actionable 7-day validation plan.
+The plan adapts to the verdict:
+
+For ADVANCE:
+- Goal: convert signal into revenue (deposits, LOIs, booked calls)
+- Include: outreach targets, landing page with pricing, concierge MVP, success threshold
+
+For NARROW:
+- Goal: tighten ICP and wedge with targeted evidence collection
+- Include: specific communities to engage, refined interview questions, A/B test angles
+
+For KILL:
+- Goal: collect the specific evidence that would REVERSE the kill verdict
+- Include: exact channels, queries, people to talk to, what reversal looks like
+- This is NOT a dead end — it's a focused evidence-seeking mission
+
+Output:
+- "verdict_context": "KILL" | "NARROW" | "ADVANCE"
+- "objective": what this plan aims to prove/disprove
+- "channels": list of specific channels/communities
+- "outreach_targets": list of 20 specific targets or methods to find them
+- "interview_script": non-leading interview script
+- "landing_page_hypotheses": 2 hypotheses with pricing (empty for KILL)
+- "concierge_procedure": manual fulfillment in 1 day (empty for KILL)
+- "success_threshold": measurable threshold (e.g., "3 deposits at $X")
+- "reversal_criteria": exact evidence that would flip KILL verdict (KILL only)
+
+Output a JSON object."""
+
+VALIDATION_PLAN_USER = """Verdict: {verdict_decision}
+Idea: {idea}
+Top pain clusters: {top_clusters}
+Narrowest wedge: {narrowest_wedge}
+What would change verdict: {what_would_change}
+
+Create a 7-day validation plan. Output JSON object only."""
+
+# ---------------------------------------------------------------------------
+# SKEPTIC PASS
+# ---------------------------------------------------------------------------
+
+SKEPTIC_SYSTEM = """You are a skeptical reviewer auditing a research report.
+Check for:
+
+1. UNCITED CLAIMS: any substantive claim without citation_indices
+2. INVENTED NUMBERS: any numeric value that doesn't appear in cited excerpts
+3. OVERCONFIDENT LANGUAGE: phrases like "definitely", "certainly", "will"
+   that should be "likely", "evidence suggests", "may"
+4. MISSING CONTRADICTIONS: evidence conflicts not flagged in the report
+
+For each issue found, output a string describing the problem.
+If the report is clean, return an empty array.
+
+Be thorough but fair. Score-related numbers (0-5) are not "invented".
+
+Output a JSON array of flag strings."""
+
+SKEPTIC_USER = """Review this research report for issues:
+
+{report_json}
+
+Output JSON array of flag strings only."""
+
+# ---------------------------------------------------------------------------
+# IDEA BRIEF GENERATION
+# ---------------------------------------------------------------------------
+
+IDEA_BRIEF_SYSTEM = """You create a structured idea brief from raw idea text.
+Output:
+- "one_liner": one-sentence refined summary
+- "buyer_persona": who pays for this
+- "workflow_replaced": what current process this replaces
+- "moment_of_pain": the specific trigger moment
+
+Output a JSON object with these fields."""
+
+IDEA_BRIEF_USER = """Raw idea: {idea}
+Niche: {niche}
+Buyer role: {buyer_role}
+
+Create structured idea brief. Output JSON object only."""
+
+
+# ---------------------------------------------------------------------------
+# Helper: format evidence summary for prompts
+# ---------------------------------------------------------------------------
+
+def format_evidence_summary(
+    citations: list[dict], max_citations: int = 50
+) -> str:
+    """Format citations into a compact summary for LLM prompts."""
+    lines = []
+    for i, c in enumerate(citations[:max_citations]):
+        excerpt = c.get("excerpt", "")
+        if len(excerpt) > 200:
+            excerpt = excerpt[:200] + "..."
+        source = c.get("source_type", "unknown")
+        url = c.get("url", "")
+        date = c.get("date_published", "unknown date")
+        lines.append(f"[{i}] ({source}) {url} ({date}): {excerpt}")
+    if len(citations) > max_citations:
+        lines.append(f"... and {len(citations) - max_citations} more citations")
+    return "\n".join(lines)
