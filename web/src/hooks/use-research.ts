@@ -11,6 +11,8 @@ export function useResearch(jobId: string) {
   const [report, setReport] = useState<ReportResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const retryCountRef = useRef(0);
+  const MAX_RETRIES = 3;
 
   const stopPolling = useCallback(() => {
     if (intervalRef.current) {
@@ -23,6 +25,7 @@ export function useResearch(jobId: string) {
     try {
       const s = await getStatus(jobId);
       setStatus(s);
+      retryCountRef.current = 0;
 
       if (s.status === "complete") {
         stopPolling();
@@ -33,8 +36,11 @@ export function useResearch(jobId: string) {
         setError("Research failed. Check engine logs for details.");
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Unknown error");
-      stopPolling();
+      retryCountRef.current += 1;
+      if (retryCountRef.current >= MAX_RETRIES) {
+        setError(e instanceof Error ? e.message : "Unknown error");
+        stopPolling();
+      }
     }
   }, [jobId, stopPolling]);
 

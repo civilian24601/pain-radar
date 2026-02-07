@@ -94,18 +94,29 @@ Each cluster represents a distinct pain point experienced by users.
 
 For each cluster, output:
 - "id": short slug (e.g., "manual-data-entry")
-- "statement": one-sentence pain statement
-- "who": who experiences this pain
-- "trigger": what triggers the pain moment
-- "workarounds": list of current workarounds mentioned in evidence
+- "statement": one-sentence pain statement that paraphrases what the cited evidence says
+- "who": who experiences this pain (as described in the evidence)
+- "trigger": what triggers the pain moment (as described in the evidence)
+- "workarounds": list of current workarounds EXPLICITLY mentioned in the cited evidence
 - "citation_indices": list of indices (0-based) into the evidence pack
 
 RULES:
 - Every citation_index MUST reference a real item in the evidence pack
 - Each cluster must reference at least 1 citation
 - Group similar complaints together, don't create 1:1 cluster:citation
-- Aim for 5-15 clusters depending on evidence volume
+- Aim for 3-10 clusters depending on evidence volume. FEWER is better.
 - A citation can belong to multiple clusters if relevant
+
+CRITICAL — do NOT invent pain points:
+- A cluster's pain statement MUST be directly supported by the cited excerpts
+- If no citation describes a specific pain, do NOT create a cluster for it
+- Do NOT extrapolate industry pains that seem plausible but aren't in the evidence
+- Do NOT create clusters about: upsell opportunities, standardization, accuracy tracking,
+  or any other pain that sounds reasonable but isn't explicitly described by a user in the evidence
+- If a citation is a product review page or editorial (not a user complaint), it does NOT count
+  as evidence of user pain — it only counts as competitor/market evidence
+
+When in doubt, create FEWER clusters. 3 well-evidenced clusters are better than 10 speculative ones.
 
 Output a JSON array of cluster objects."""
 
@@ -192,12 +203,22 @@ Extract competitor information. Output JSON array only."""
 # PAYABILITY ASSESSMENT
 # ---------------------------------------------------------------------------
 
-PAYABILITY_SYSTEM = """You assess whether people/companies pay for solving this problem.
-Look for signals in the evidence:
+PAYABILITY_SYSTEM = """You assess whether people/companies pay for solving this SPECIFIC problem.
 
-1. hiring_signals: job posts, team roles dedicated to this task
-2. outsourcing_signals: agencies, freelancers, contractors hired for this
-3. template_sop_signals: paid templates, SOPs, courses about this workflow
+CRITICAL DISTINCTION — you must separate two things:
+1. GENERAL MARKET payability: does spending exist in the broader industry/category?
+   (e.g., "field service companies buy software" — true but not useful)
+2. IDEA-SPECIFIC payability: does the evidence show people paying or willing to pay
+   for the EXACT workflow/pain that this idea addresses?
+   (e.g., "contractors pay $X/mo for quoting tools" — directly relevant)
+
+Only idea-specific signals count toward overall_strength. General market signals
+should be noted in the summary but MUST NOT inflate the strength rating.
+
+Look for signals in the evidence:
+1. hiring_signals: job posts, team roles dedicated to this SPECIFIC task
+2. outsourcing_signals: agencies, freelancers, contractors hired for this SPECIFIC task
+3. template_sop_signals: paid templates, SOPs, courses about this SPECIFIC workflow
 
 For each signal, provide:
 - "text": description of the signal
@@ -205,40 +226,49 @@ For each signal, provide:
 
 Also assess:
 - "overall_strength": "strong" | "moderate" | "weak" | "none"
-- "summary": one paragraph synthesizing payability evidence
+- "summary": one paragraph distinguishing general market payability from idea-specific payability
 
 RULES:
 - Only cite evidence that actually exists
-- "strong" = multiple clear spend signals
-- "moderate" = some indirect signals
-- "weak" = minimal hints
-- "none" = no spend signals found
+- "strong" = multiple clear IDEA-SPECIFIC spend signals from DIFFERENT sources
+- "moderate" = some idea-specific indirect signals
+- "weak" = general market signals only, no idea-specific evidence
+- "none" = no spend signals found at all
+- If all your signals come from the same URL or same source, that is at most "moderate"
+- Signals about adjacent tools or general industry spending are NOT idea-specific
 
 Output a JSON object."""
 
 PAYABILITY_USER = """Idea: {idea}
 
-Evidence pack ({count} citations):
+Evidence pack ({count} citations from {unique_urls} unique URLs):
 {evidence_summary}
 
-Assess payability signals. Output JSON object only."""
+Assess payability signals. Distinguish general market signals from idea-specific signals. Output JSON object only."""
 
 # ---------------------------------------------------------------------------
 # CONFLICT DETECTION
 # ---------------------------------------------------------------------------
 
 CONFLICT_SYSTEM = """You detect contradictions in research evidence.
-Examine the clusters and competitor data for:
 
-1. Cluster contradictions: two clusters that make opposing claims
-   e.g., "Users say X is too complex" vs "Users say X is too basic"
-2. Competitor contradictions: conflicting claims about the same competitor
-3. Pain-payability gaps: strong pain signals but zero spend signals (or vice versa)
+A conflict is ONLY valid if it meets one of these criteria:
+1. Same ICP + same workflow step with opposing claims
+   e.g., podcast hosts say "booking is too manual" vs "booking tools are overkill"
+2. Explicitly opposing claims about the SAME competitor/tool
+   e.g., "Tool X is expensive" vs "Tool X is free"
+3. Pain-payability paradox: strong pain signals but zero spend signals for the same workflow
+
+Do NOT flag as conflicts:
+- Claims about different user groups or different workflows
+- Superficial tensions between broadly related topics
+- Different opinions from clearly different market segments
 
 For each conflict, output:
 - "description": what the contradiction is
 - "side_a": {"text": "claim A", "citation_indices": []}
 - "side_b": {"text": "claim B", "citation_indices": []}
+- "relevance": "strong" (same ICP + same step + directly opposing) or "weak" (loosely related, different contexts)
 
 If no conflicts found, return an empty array.
 Do NOT invent conflicts. Only report genuine contradictions in the evidence.
@@ -268,9 +298,10 @@ Verdicts:
 - KILL: weak evidence, weak payability, or saturated with no differentiation wedge
 - NARROW: pain exists but ICP or wedge must tighten before action
 - ADVANCE: pain + payability + wedge are all evidenced
+- INSUFFICIENT_EVIDENCE: evidence is too thin, off-topic, or low-confidence to draw conclusions. Use this when the evidence pack does not contain enough on-topic, idea-specific signals to justify KILL, NARROW, or ADVANCE.
 
 Output:
-- "decision": "KILL" | "NARROW" | "ADVANCE"
+- "decision": "KILL" | "NARROW" | "ADVANCE" | "INSUFFICIENT_EVIDENCE"
 - "reasons": top 3 evidence-backed reasons (each with citation_indices)
 - "risks": top 3 risks (each with citation_indices)
 - "narrowest_wedge": the most specific viable angle
@@ -279,8 +310,26 @@ Output:
 
 RULES:
 - Be skeptical. Default to KILL unless evidence compels otherwise.
-- Every reason and risk MUST cite evidence.
+- Every reason and risk MUST cite evidence via citation_indices.
 - Do not use encouraging language unless earned.
+
+CRITICAL — reason and risk quality requirements:
+- Each reason/risk must be a DOMAIN-LEVEL OBSERVATION about the idea, grounded in what a specific citation says.
+- Each reason/risk text must reference a concrete fact from the cited excerpt.
+
+GOOD reason examples:
+- "Seed thread [5] is career advice for estimators, not a workflow pain signal — no one describes frustration with their quoting process"
+- "Citation [10] shows estimators discuss AGTEK and PlanSwift, suggesting incumbent tools already serve this workflow"
+- "No citation contains a user describing manual workarounds for generating quotes"
+
+BAD reason examples (NEVER output these):
+- "Insufficient evidence to justify KILL verdict" ← meta-statement about the analysis, not a domain observation
+- "Evidence is too sparse for reliable analysis" ← says nothing about the idea domain
+- "No specific reasons found" ← lazy; cite the closest evidence and explain the gap
+- "The evidence mix is diluted" ← describes the evidence set, not the idea
+
+If evidence is weak: describe what you LOOKED FOR and didn't find, citing the closest available evidence.
+Example: "Searched for contractor quotes about manual estimating pain, but citation [5] only discusses career paths and citation [10] reviews existing tools positively — no unmet workflow pain found."
 
 Output a JSON object."""
 
@@ -323,6 +372,11 @@ For KILL:
 - Include: exact channels, queries, people to talk to, what reversal looks like
 - This is NOT a dead end — it's a focused evidence-seeking mission
 
+For INSUFFICIENT_EVIDENCE:
+- Goal: determine whether this idea is worth investigating further
+- Include: exactly what evidence is missing, where to find it, specific channels and communities
+- This is a research mission, not a validation mission — focus on collecting on-topic signals
+
 Output:
 - "verdict_context": "KILL" | "NARROW" | "ADVANCE"
 - "objective": what this plan aims to prove/disprove
@@ -331,8 +385,11 @@ Output:
 - "interview_script": non-leading interview script
 - "landing_page_hypotheses": 2 hypotheses with pricing (empty for KILL)
 - "concierge_procedure": manual fulfillment in 1 day (empty for KILL)
-- "success_threshold": measurable threshold (e.g., "3 deposits at $X")
-- "reversal_criteria": exact evidence that would flip KILL verdict (KILL only)
+- "success_threshold": measurable threshold WITHOUT invented dollar amounts.
+  GOOD: "3 out of 20 interviewees describe unmet workflow pain and express willingness to pay"
+  GOOD: "5 contractors confirm they currently use spreadsheets/manual process for quoting"
+  BAD: "3 deposits at $49/month" — do not invent pricing numbers
+- "reversal_criteria": exact evidence that would flip KILL verdict (KILL or INSUFFICIENT_EVIDENCE)
 
 Output a JSON object."""
 
@@ -397,16 +454,49 @@ Create structured idea brief. Output JSON object only."""
 def format_evidence_summary(
     citations: list[dict], max_citations: int = 50
 ) -> str:
-    """Format citations into a compact summary for LLM prompts."""
+    """Format citations into a compact summary for LLM prompts.
+
+    Groups citations sharing the same URL to prevent over-counting a single
+    source as multiple independent evidence points.
+    """
+    from collections import defaultdict
+
+    capped = citations[:max_citations]
+
+    # Group indices by URL for dedup annotation
+    url_groups: dict[str, list[int]] = defaultdict(list)
+    for i, c in enumerate(capped):
+        url_groups[c.get("url", "")].append(i)
+
     lines = []
-    for i, c in enumerate(citations[:max_citations]):
+
+    # Add dedup note if there are duplicates
+    unique_urls = len(url_groups)
+    total = len(capped)
+    if unique_urls < total:
+        lines.append(
+            f"NOTE: {total} citations from {unique_urls} unique URLs. "
+            f"Citations sharing a URL represent ONE source — do not count them "
+            f"as independent evidence.\n"
+        )
+
+    for i, c in enumerate(capped):
         excerpt = c.get("excerpt", "")
         if len(excerpt) > 200:
             excerpt = excerpt[:200] + "..."
         source = c.get("source_type", "unknown")
         url = c.get("url", "")
         date = c.get("date_published", "unknown date")
-        lines.append(f"[{i}] ({source}) {url} ({date}): {excerpt}")
+
+        # Annotate if this URL has multiple citations
+        siblings = url_groups.get(url, [])
+        url_note = ""
+        if len(siblings) > 1:
+            others = [str(s) for s in siblings if s != i]
+            url_note = f" [same URL as {', '.join(others)}]"
+
+        lines.append(f"[{i}] ({source}) {url} ({date}){url_note}: {excerpt}")
+
     if len(citations) > max_citations:
         lines.append(f"... and {len(citations) - max_citations} more citations")
     return "\n".join(lines)

@@ -69,6 +69,8 @@ async def detect_conflicts(
                 if conflict:
                     conflicts.append(conflict)
 
+            # Strong conflicts first
+            conflicts.sort(key=lambda c: 0 if c.relevance == "strong" else 1)
             return conflicts
 
         except Exception:
@@ -98,7 +100,14 @@ def _parse_conflict(item: dict, pack_size: int) -> ConflictReport | None:
         side_b = parse_side(side_b_raw)
 
         if side_a and side_b:
-            return ConflictReport(description=description, side_a=side_a, side_b=side_b)
+            relevance_raw = item.get("relevance", "weak")
+            relevance = relevance_raw if relevance_raw in ("strong", "weak") else "weak"
+            return ConflictReport(
+                description=description,
+                side_a=side_a,
+                side_b=side_b,
+                relevance=relevance,
+            )
         return None
 
     except Exception:

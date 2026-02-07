@@ -81,20 +81,7 @@ async def collect_all_evidence(
         if progress_callback:
             progress_callback(packs_done, len(all_citations))
 
-    # Store citations in DB
-    for citation in all_citations:
-        await db.store_citation(
-            job_id=job_id,
-            url=citation.url,
-            excerpt=citation.excerpt,
-            source_type=citation.source_type.value,
-            date_published=citation.date_published,
-            date_retrieved=citation.date_retrieved,
-            recency_months=citation.recency_months,
-            snapshot_hash=citation.snapshot_hash,
-        )
-
-    # Store snapshots in DB (deduplicated by hash)
+    # Store snapshots FIRST (citations have FK to snapshots)
     seen_hashes: set[str] = set()
     for citation in all_citations:
         if citation.snapshot_hash not in seen_hashes:
@@ -108,6 +95,19 @@ async def collect_all_evidence(
                     fetched_at=citation.date_retrieved,
                     storage_path=str(snapshot_path),
                 )
-                seen_hashes.add(citation.snapshot_hash)
+            seen_hashes.add(citation.snapshot_hash)
+
+    # Store citations in DB
+    for citation in all_citations:
+        await db.store_citation(
+            job_id=job_id,
+            url=citation.url,
+            excerpt=citation.excerpt,
+            source_type=citation.source_type.value,
+            date_published=citation.date_published,
+            date_retrieved=citation.date_retrieved,
+            recency_months=citation.recency_months,
+            snapshot_hash=citation.snapshot_hash,
+        )
 
     return all_citations, {}

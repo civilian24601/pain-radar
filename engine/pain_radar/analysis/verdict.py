@@ -31,6 +31,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _best_citation_indices(citations: list[Citation], n: int = 3) -> list[int]:
+    """Pick up to *n* citation indices from diverse source types."""
+    if not citations:
+        return [0]
+    seen_types: set[str] = set()
+    picked: list[int] = []
+    for i, c in enumerate(citations):
+        stype = c.source_type.value if hasattr(c.source_type, "value") else str(c.source_type)
+        if stype not in seen_types:
+            picked.append(i)
+            seen_types.add(stype)
+            if len(picked) >= n:
+                break
+    # Fill remaining slots if we haven't reached n
+    if len(picked) < n:
+        for i in range(len(citations)):
+            if i not in picked:
+                picked.append(i)
+                if len(picked) >= n:
+                    break
+    return picked or [0]
+
+
+def _match_citation_to_text(text: str, citations: list[Citation]) -> list[int]:
+    """Find the best-matching citation for a text string via word overlap."""
+    if not citations:
+        return [0]
+    text_words = set(text.lower().split())
+    best_idx = 0
+    best_score = 0
+    for i, c in enumerate(citations):
+        excerpt_words = set(c.excerpt.lower().split())
+        overlap = len(text_words & excerpt_words)
+        if overlap > best_score:
+            best_score = overlap
+            best_idx = i
+    return [best_idx]
+
+
 async def generate_verdict(
     clusters: list[PainCluster],
     competitors: list[Competitor],
@@ -86,23 +125,24 @@ async def generate_verdict(
                 max_tokens=4096,
             )
 
-            verdict = _parse_verdict(raw, len(citations), conflicts)
+            verdict = _parse_verdict(raw, len(citations), conflicts, citations)
             if verdict:
                 return verdict
 
         except Exception:
             logger.exception(f"Verdict generation attempt {attempt + 1} failed")
 
-    # Fallback: KILL with insufficient evidence
+    # Fallback: INSUFFICIENT_EVIDENCE when retries exhausted
+    fallback_indices = _best_citation_indices(citations)
     return Verdict(
-        decision=VerdictDecision.KILL,
+        decision=VerdictDecision.INSUFFICIENT_EVIDENCE,
         reasons=[EvidencedClaim(
-            text="Insufficient evidence to evaluate idea",
-            citation_indices=[0] if citations else [0],
+            text="Insufficient evidence to evaluate idea after exhausting analysis retries",
+            citation_indices=fallback_indices,
         )],
         risks=[EvidencedClaim(
-            text="Analysis could not be completed",
-            citation_indices=[0] if citations else [0],
+            text="Analysis could not be completed; evidence may be off-topic or too sparse",
+            citation_indices=fallback_indices,
         )],
         narrowest_wedge="Unable to determine",
         what_would_change="More evidence from targeted research",
@@ -111,7 +151,10 @@ async def generate_verdict(
 
 
 def _parse_verdict(
-    raw: dict, pack_size: int, conflicts: list[ConflictReport]
+    raw: dict,
+    pack_size: int,
+    conflicts: list[ConflictReport],
+    citations: list[Citation] | None = None,
 ) -> Verdict | None:
     """Parse raw verdict output."""
     try:
@@ -121,6 +164,8 @@ def _parse_verdict(
         except ValueError:
             decision = VerdictDecision.KILL
 
+        _citations = citations or []
+
         def parse_claims(key: str) -> list[EvidencedClaim]:
             claims = []
             for item in raw.get(key, []):
@@ -129,17 +174,60 @@ def _parse_verdict(
                     indices = [i for i in item.get("citation_indices", []) if 0 <= i < pack_size]
                     if text and indices:
                         claims.append(EvidencedClaim(text=text, citation_indices=indices))
-                elif isinstance(item, str):
-                    claims.append(EvidencedClaim(text=item, citation_indices=[0]))
+                elif isinstance(item, str) and item.strip():
+                    claims.append(EvidencedClaim(
+                        text=item,
+                        citation_indices=_match_citation_to_text(item, _citations),
+                    ))
             return claims
 
         reasons = parse_claims("reasons")
         risks = parse_claims("risks")
 
+        # Filter out meta-statements (about the analysis process, not the domain)
+        meta_phrases = [
+            "insufficient evidence",
+            "evidence is too sparse",
+            "no specific reasons",
+            "evidence mix",
+            "too thin",
+            "analysis process",
+            "evidence too sparse",
+            "risk assessment incomplete",
+        ]
+
+        def is_meta_statement(text: str) -> bool:
+            lower = text.lower()
+            return any(p in lower for p in meta_phrases)
+
+        reasons = [r for r in reasons if not is_meta_statement(r.text)]
+        risks = [r for r in risks if not is_meta_statement(r.text)]
+
+        fallback_indices = _best_citation_indices(_citations)
         if not reasons:
-            reasons = [EvidencedClaim(text="No specific reasons provided", citation_indices=[0])]
+            # Generate a domain-grounded fallback by describing what the
+            # closest evidence actually shows
+            closest = _citations[fallback_indices[0]] if _citations else None
+            if closest:
+                fallback_text = (
+                    f"Closest available evidence (citation [{fallback_indices[0]}]) "
+                    f"discusses '{closest.excerpt[:100]}...' which does not "
+                    f"demonstrate the workflow pain this idea targets"
+                )
+            else:
+                fallback_text = "No evidence found describing the target workflow pain"
+            reasons = [EvidencedClaim(
+                text=fallback_text,
+                citation_indices=fallback_indices,
+            )]
         if not risks:
-            risks = [EvidencedClaim(text="No specific risks identified", citation_indices=[0])]
+            risks = [EvidencedClaim(
+                text=(
+                    "No domain-specific risk signals found in the evidence — "
+                    "the evidence set does not address this idea's workflow directly"
+                ),
+                citation_indices=fallback_indices,
+            )]
 
         return Verdict(
             decision=decision,
@@ -200,13 +288,21 @@ async def generate_validation_plan(
         landing_page_hypotheses=[],
         concierge_procedure="",
         success_threshold="3 people willing to pay for a solution",
-        reversal_criteria="Strong payability signals from 5+ sources" if verdict.decision == VerdictDecision.KILL else None,
+        reversal_criteria=(
+            "Strong payability signals from 5+ sources"
+            if verdict.decision in {VerdictDecision.KILL, VerdictDecision.INSUFFICIENT_EVIDENCE}
+            else None
+        ),
     )
 
 
 def _parse_validation_plan(raw: dict, decision: VerdictDecision) -> ValidationPlan | None:
     """Parse raw validation plan output."""
     try:
+        success_threshold = raw.get("success_threshold", "")
+        if not success_threshold:
+            success_threshold = "Define measurable threshold after collecting evidence"
+
         return ValidationPlan(
             verdict_context=decision,
             objective=raw.get("objective", "Validate idea"),
@@ -215,9 +311,54 @@ def _parse_validation_plan(raw: dict, decision: VerdictDecision) -> ValidationPl
             interview_script=raw.get("interview_script", ""),
             landing_page_hypotheses=raw.get("landing_page_hypotheses", []),
             concierge_procedure=raw.get("concierge_procedure", ""),
-            success_threshold=raw.get("success_threshold", ""),
+            success_threshold=success_threshold,
             reversal_criteria=raw.get("reversal_criteria"),
         )
     except Exception:
         logger.exception("Failed to parse validation plan")
         return None
+
+
+def enforce_verdict_payability_consistency(
+    verdict: Verdict,
+    payability: PayabilityAssessment,
+) -> PayabilityAssessment:
+    """Cap payability when verdict contradicts it.
+
+    - INSUFFICIENT_EVIDENCE: cap to "none" (can't assess payability without evidence)
+    - KILL: cap to "weak" (if evidence is too weak for ADVANCE, payability can't
+      be strong either — at best general market signals exist)
+    """
+    original = payability.overall_strength
+
+    if verdict.decision == VerdictDecision.INSUFFICIENT_EVIDENCE:
+        if original not in ("none",):
+            return PayabilityAssessment(
+                hiring_signals=payability.hiring_signals,
+                outsourcing_signals=payability.outsourcing_signals,
+                template_sop_signals=payability.template_sop_signals,
+                overall_strength="none",
+                summary=(
+                    f"{payability.summary} "
+                    f"[Capped from '{original}' to 'none': evidence is "
+                    f"insufficient to assess idea-specific payability.]"
+                ),
+            )
+
+    if verdict.decision == VerdictDecision.KILL:
+        if original in ("strong", "moderate"):
+            return PayabilityAssessment(
+                hiring_signals=payability.hiring_signals,
+                outsourcing_signals=payability.outsourcing_signals,
+                template_sop_signals=payability.template_sop_signals,
+                overall_strength="weak",
+                summary=(
+                    f"{payability.summary} "
+                    f"[Capped from '{original}' to 'weak': if evidence "
+                    f"supports KILL, idea-specific payability cannot be "
+                    f"strong. General market signals may exist but are not "
+                    f"idea-specific.]"
+                ),
+            )
+
+    return payability

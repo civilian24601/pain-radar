@@ -2,7 +2,7 @@
 
 export type SourceType = "reddit" | "review" | "competitor" | "job_post" | "web";
 export type OnboardingModel = "self_serve" | "sales_led" | "unknown";
-export type VerdictDecision = "KILL" | "NARROW" | "ADVANCE";
+export type VerdictDecision = "KILL" | "NARROW" | "ADVANCE" | "INSUFFICIENT_EVIDENCE";
 export type JobStatus =
   | "created"
   | "clarifying"
@@ -71,6 +71,7 @@ export interface ConflictReport {
   description: string;
   side_a: EvidencedClaim;
   side_b: EvidencedClaim;
+  relevance: "strong" | "weak";
 }
 
 export interface Verdict {

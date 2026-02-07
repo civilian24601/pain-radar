@@ -24,7 +24,11 @@ class Settings(BaseSettings):
     engine_port: int = 8000
     data_dir: Path = Path("./data")
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    model_config = {
+        "env_file": ("../.env", ".env"),
+        "env_file_encoding": "utf-8",
+        "extra": "ignore",
+    }
 
     @property
     def db_path(self) -> Path:

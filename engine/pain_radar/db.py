@@ -157,6 +157,17 @@ class Database:
         row = await cursor.fetchone()
         return dict(row) if row else None
 
+    async def get_snapshots_for_job(self, job_id: str) -> list[dict]:
+        """Get all snapshots referenced by citations for a job."""
+        cursor = await self.db.execute(
+            "SELECT DISTINCT s.content_hash, s.raw_text FROM source_snapshots s "
+            "INNER JOIN citations c ON c.snapshot_hash = s.content_hash "
+            "WHERE c.job_id = ?",
+            (job_id,),
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
     # -- Citations --
 
     async def store_citation(

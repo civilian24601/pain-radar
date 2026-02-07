@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { getExportUrl } from "@/lib/api-client";
 import type {
+  Citation,
   Competitor,
   EvidencedClaim,
   PainCluster,
@@ -18,6 +19,14 @@ const VERDICT_STYLES: Record<string, string> = {
   KILL: "bg-red-950 border-red-700 text-red-300",
   NARROW: "bg-yellow-950 border-yellow-700 text-yellow-300",
   ADVANCE: "bg-green-950 border-green-700 text-green-300",
+  INSUFFICIENT_EVIDENCE: "bg-zinc-900 border-zinc-600 text-zinc-300",
+};
+
+const VERDICT_LABELS: Record<string, string> = {
+  KILL: "KILL",
+  NARROW: "NARROW",
+  ADVANCE: "ADVANCE",
+  INSUFFICIENT_EVIDENCE: "INSUFFICIENT EVIDENCE",
 };
 
 export function ReportView({ report }: Props) {
@@ -51,13 +60,27 @@ export function ReportView({ report }: Props) {
             <h4 className="text-sm font-medium text-amber-400 mb-2">
               Conflicts Detected ({report.conflicts.length})
             </h4>
-            {report.conflicts.map((c, i) => (
-              <div key={i} className="mb-2 text-sm bg-amber-950/30 border border-amber-900/50 rounded p-3">
+            {report.conflicts.filter(c => c.relevance === "strong").map((c, i) => (
+              <div key={`strong-${i}`} className="mb-2 text-sm bg-amber-950/30 border border-amber-900/50 rounded p-3">
                 <p className="text-zinc-300 mb-1">{c.description}</p>
                 <p className="text-zinc-500">A: {c.side_a.text}</p>
                 <p className="text-zinc-500">B: {c.side_b.text}</p>
               </div>
             ))}
+            {report.conflicts.filter(c => c.relevance !== "strong").length > 0 && (
+              <details className="mt-2">
+                <summary className="text-xs text-zinc-600 cursor-pointer hover:text-zinc-400">
+                  {report.conflicts.filter(c => c.relevance !== "strong").length} weak conflict(s)
+                </summary>
+                {report.conflicts.filter(c => c.relevance !== "strong").map((c, i) => (
+                  <div key={`weak-${i}`} className="mb-2 mt-2 text-sm bg-zinc-900/30 border border-zinc-800/50 rounded p-3">
+                    <p className="text-zinc-500 mb-1">{c.description}</p>
+                    <p className="text-zinc-600">A: {c.side_a.text}</p>
+                    <p className="text-zinc-600">B: {c.side_b.text}</p>
+                  </div>
+                ))}
+              </details>
+            )}
           </div>
         )}
 
@@ -78,9 +101,15 @@ export function ReportView({ report }: Props) {
 
       {/* Pain Map */}
       <Section title={`Pain Map (${report.pain_map.length} clusters)`}>
-        {report.pain_map.map((cluster) => (
-          <ClusterCard key={cluster.id} cluster={cluster} citations={report.evidence_pack} />
-        ))}
+        {[...report.pain_map]
+          .sort((a, b) => {
+            const scoreSum = (c: PainCluster) =>
+              c.scores.frequency.score + c.scores.severity.score + c.scores.payability.score;
+            return scoreSum(b) - scoreSum(a);
+          })
+          .map((cluster, i) => (
+            <ClusterCard key={cluster.id} cluster={cluster} citations={report.evidence_pack} rank={i + 1} />
+          ))}
       </Section>
 
       {/* Competitor Table */}
@@ -233,7 +262,7 @@ function Section({
 function VerdictBadge({ decision }: { decision: string }) {
   return (
     <div className={`inline-flex items-center rounded-lg border px-4 py-2 text-lg font-bold ${VERDICT_STYLES[decision] || "bg-zinc-800 border-zinc-700 text-zinc-300"}`}>
-      {decision}
+      {VERDICT_LABELS[decision] || decision}
     </div>
   );
 }
@@ -276,9 +305,11 @@ function ClaimList({
 function ClusterCard({
   cluster,
   citations,
+  rank,
 }: {
   cluster: PainCluster;
-  citations: { url: string }[];
+  citations: Citation[];
+  rank: number;
 }) {
   const dims: [string, ScoredDimension][] = [
     ["Frequency", cluster.scores.frequency],
@@ -292,11 +323,34 @@ function ClusterCard({
 
   return (
     <details className="mb-3 border border-zinc-800 rounded">
-      <summary className="cursor-pointer px-3 py-2 text-sm select-none flex justify-between items-center">
-        <span className="text-zinc-200">{cluster.statement.text}</span>
-        <span className="text-xs text-zinc-500 ml-2 shrink-0">
-          conf: {(cluster.confidence * 100).toFixed(0)}%
-        </span>
+      <summary className="cursor-pointer px-3 py-2 text-sm select-none">
+        <div className="flex justify-between items-start">
+          <span className="text-zinc-200">
+            <span className="text-zinc-600 mr-2">#{rank}</span>
+            {cluster.statement.text}
+          </span>
+          <span className="text-xs text-zinc-500 ml-2 shrink-0">
+            conf: {(cluster.confidence * 100).toFixed(0)}%
+          </span>
+        </div>
+        <div className="mt-1 flex gap-2 text-xs text-zinc-600">
+          {cluster.citation_indices.slice(0, 2).map((idx) => {
+            const cite = citations[idx];
+            if (!cite) return null;
+            return (
+              <a
+                key={idx}
+                href={cite.url || "#"}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="truncate max-w-[250px] hover:text-zinc-400 underline"
+                onClick={(e) => e.stopPropagation()}
+              >
+                [{idx}] {cite.excerpt?.slice(0, 60) || ""}...
+              </a>
+            );
+          })}
+        </div>
       </summary>
       <div className="px-3 pb-3 space-y-2">
         <div className="flex gap-4 text-xs text-zinc-500">

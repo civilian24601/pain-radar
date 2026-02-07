@@ -162,10 +162,12 @@ async def assess_payability(
     """Assess payability signals from evidence."""
     evidence_dicts = [c.model_dump() for c in citations]
     evidence_summary = format_evidence_summary(evidence_dicts)
+    unique_urls = len({c.url for c in citations})
 
     prompt_content = PAYABILITY_USER.format(
         idea=idea,
         count=len(citations),
+        unique_urls=unique_urls,
         evidence_summary=evidence_summary,
     )
 
@@ -193,7 +195,11 @@ async def assess_payability(
 
 
 def _parse_payability(raw: dict, pack_size: int) -> PayabilityAssessment:
-    """Parse raw payability output."""
+    """Parse raw payability output.
+
+    Hard cap: if all signals reference 2 or fewer unique citation indices,
+    strength cannot exceed "moderate" (prevents single-source inflation).
+    """
     def parse_signals(key: str) -> list[EvidencedClaim]:
         signals = []
         for s in raw.get(key, []):
@@ -203,14 +209,31 @@ def _parse_payability(raw: dict, pack_size: int) -> PayabilityAssessment:
                     signals.append(EvidencedClaim(text=s["text"], citation_indices=indices))
         return signals
 
+    hiring = parse_signals("hiring_signals")
+    outsourcing = parse_signals("outsourcing_signals")
+    template_sop = parse_signals("template_sop_signals")
+
     strength = raw.get("overall_strength", "none")
     if strength not in ("strong", "moderate", "weak", "none"):
         strength = "none"
 
+    # Hard cap: count unique citation indices across all signals.
+    # If all signals point to <= 2 unique sources, cap at "moderate".
+    all_indices: set[int] = set()
+    for sig in hiring + outsourcing + template_sop:
+        all_indices.update(sig.citation_indices)
+
+    summary = raw.get("summary", "No payability assessment available.")
+    if strength == "strong" and len(all_indices) <= 2:
+        strength = "moderate"
+        summary += (
+            " [Capped from 'strong': all signals reference 2 or fewer unique citations.]"
+        )
+
     return PayabilityAssessment(
-        hiring_signals=parse_signals("hiring_signals"),
-        outsourcing_signals=parse_signals("outsourcing_signals"),
-        template_sop_signals=parse_signals("template_sop_signals"),
+        hiring_signals=hiring,
+        outsourcing_signals=outsourcing,
+        template_sop_signals=template_sop,
         overall_strength=strength,
-        summary=raw.get("summary", "No payability assessment available."),
+        summary=summary,
     )

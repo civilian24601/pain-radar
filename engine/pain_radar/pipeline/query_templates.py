@@ -45,7 +45,51 @@ REVIEW_TEMPLATES = [
 HIRING_TEMPLATES = [
     '"{keyword}" hiring OR job posting',
     '"{keyword}" freelancer OR contractor OR agency',
+    '"{keyword}" "looking to hire" OR "need someone" OR "job description"',
+    '"{keyword}" salary OR compensation OR "full-time" role',
 ]
+
+# Tools/substitutes reality check — appended to web pack for ALL ideas
+TOOLS_REALITY_TEMPLATES = [
+    '"{keyword}" currently using OR "we use" OR "switched from"',
+    '"{keyword}" spreadsheet OR manual OR "no tool" workaround',
+    '"{keyword}" alternative to OR replacement for',
+]
+
+# ---------------------------------------------------------------------------
+# Niche-specific templates — activated by keyword match on niche/idea
+# ---------------------------------------------------------------------------
+
+NICHE_TEMPLATES: dict[str, dict[str, list[str]]] = {
+    "podcast": {
+        "reddit": [
+            '"podcast guest booking" site:reddit.com frustrating OR manual OR tedious',
+            '"podcast outreach" OR "guest scheduling" site:reddit.com',
+            '"guest intake form" podcast site:reddit.com',
+            'site:reddit.com/r/podcasting guest booking OR outreach OR scheduling',
+            'site:reddit.com/r/podcastguestexchange booking workflow',
+        ],
+        "web": [
+            '"podcast guest booking" software OR tool OR platform',
+            '"podcast guest management" airtable OR notion OR spreadsheet',
+            '"podcast guest" outreach template OR workflow',
+            'PodMatch OR MatchMaker.fm OR PodcastGuests review',
+            'Rephonic OR "Listen Notes" podcast research tool',
+            '"PR pitching podcasts" workflow OR process',
+        ],
+        "review": [
+            '"podcast booking" OR "podcast scheduling" reviews complaints',
+            'PodMatch review OR MatchMaker.fm review',
+        ],
+        "hiring": [
+            '"podcast booker" hiring OR job',
+            '"podcast booking assistant" job OR role',
+            '"guest outreach specialist" podcast',
+            '"podcast producer" guest booking',
+            '"PR agency" podcast pitching',
+        ],
+    },
+}
 
 
 def _expand_templates(
@@ -102,6 +146,20 @@ async def generate_queries(
         "_keywords": keywords,
         "_idea": idea,
     }
+
+    # Step 2b: Add tools/reality templates to web pack (all ideas)
+    queries["web"].extend(_expand_templates(TOOLS_REALITY_TEMPLATES, keywords))
+
+    # Step 2c: Add niche-specific templates if niche/idea matches
+    niche_text = f"{niche} {idea}".lower()
+    for niche_key, niche_packs in NICHE_TEMPLATES.items():
+        if niche_key in niche_text:
+            for pack_name, templates in niche_packs.items():
+                if pack_name in queries:
+                    queries[pack_name].extend(
+                        _expand_templates(templates, keywords)
+                    )
+            logger.info(f"Activated niche templates: {niche_key}")
 
     # Step 3: LLM adds 1-2 niche-specific queries per pack (optional)
     try:

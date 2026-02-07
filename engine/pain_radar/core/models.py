@@ -45,6 +45,7 @@ class VerdictDecision(str, Enum):
     KILL = "KILL"
     NARROW = "NARROW"
     ADVANCE = "ADVANCE"
+    INSUFFICIENT_EVIDENCE = "INSUFFICIENT_EVIDENCE"
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +159,7 @@ class ConflictReport(BaseModel):
     description: str
     side_a: EvidencedClaim
     side_b: EvidencedClaim
+    relevance: Literal["strong", "weak"] = "weak"
 
 
 # ---------------------------------------------------------------------------
@@ -185,8 +187,18 @@ class ValidationPlan(BaseModel):
     interview_script: str
     landing_page_hypotheses: list[str] = Field(default_factory=list)  # empty for KILL
     concierge_procedure: str = ""  # empty for KILL
-    success_threshold: str  # for KILL: "what reversal evidence looks like"
-    reversal_criteria: str | None = None  # KILL only
+    success_threshold: str = Field(..., min_length=1)
+    reversal_criteria: str | None = None  # KILL / INSUFFICIENT_EVIDENCE
+
+    @model_validator(mode="after")
+    def reversal_criteria_required_for_kill(self) -> ValidationPlan:
+        """KILL and INSUFFICIENT_EVIDENCE must have reversal_criteria."""
+        kill_like = {VerdictDecision.KILL, VerdictDecision.INSUFFICIENT_EVIDENCE}
+        if self.verdict_context in kill_like and not self.reversal_criteria:
+            self.reversal_criteria = (
+                "Evidence from targeted research that contradicts the current assessment"
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
