@@ -163,6 +163,23 @@ class ConflictReport(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Evidence Quality Metrics — deterministic, computed from evidence features
+# ---------------------------------------------------------------------------
+
+class EvidenceQualityMetrics(BaseModel):
+    """Deterministic metrics computed from evidence features."""
+    cluster_confidences: list[float] = Field(default_factory=list)
+    median_confidence: float = 0.0
+    high_confidence_count: int = 0
+    total_clusters: int = 0
+    total_citations: int = 0
+    unique_domains: int = 0
+    unique_source_types: int = 0
+    topic_relevance_ratio: float | None = None
+    gate_triggered: str | None = None  # "confidence" | "relevance" | None
+
+
+# ---------------------------------------------------------------------------
 # Verdict
 # ---------------------------------------------------------------------------
 
@@ -173,6 +190,7 @@ class Verdict(BaseModel):
     narrowest_wedge: str
     what_would_change: str  # evidence that reverses verdict
     conflicts: list[ConflictReport] = Field(default_factory=list)
+    evidence_quality_notes: list[str] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -267,3 +285,4 @@ class ResearchReport(BaseModel):
     evidence_pack: list[Citation]
     skeptic_flags: list[str]
     conflicts: list[ConflictReport]
+    evidence_quality: EvidenceQualityMetrics = Field(default_factory=EvidenceQualityMetrics)

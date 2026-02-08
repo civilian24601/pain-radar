@@ -32,7 +32,9 @@ class WebSearchSourcePack(SourcePack):
         for query in queries:
             try:
                 if settings.has_serper:
-                    results = await _serper_search(query, settings.serper_api_key)
+                    results = await _serper_search(
+                        query, settings.serper_api_key, settings.search_recency,
+                    )
                 else:
                     results = await _duckduckgo_search(query)
 
@@ -74,13 +76,16 @@ class WebSearchSourcePack(SourcePack):
         return citations
 
 
-async def _serper_search(query: str, api_key: str) -> list[dict]:
+async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
     """Search via Serper.dev API."""
+    payload: dict = {"q": query, "num": 10}
+    if tbs:
+        payload["tbs"] = tbs
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "num": 10},
+            json=payload,
         )
         response.raise_for_status()
         data = response.json()

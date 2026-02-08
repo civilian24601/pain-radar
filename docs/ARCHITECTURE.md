@@ -51,6 +51,28 @@ not smoothed over. Conflicts appear in the verdict.
 8. SKEPTIC PASS → red team review
 9. ASSEMBLY → store in SQLite
 
+## Future Work: Search Infrastructure
+
+### Tavily as secondary search source
+Tavily (tavily.com) is an AI-optimized search API designed for RAG pipelines.
+Key benefits over Serper for our use case:
+- **Built-in relevance scores (0-1)** per result — could feed directly into evidence gate
+- **`include_raw_content: "markdown"`** — returns cleaned page content, potentially
+  skipping the separate fetch/snapshot step for some sources
+- **`include_domains` / `exclude_domains`** — cleaner domain filtering than `site:` operators
+- **Time range filtering** — `day`, `week`, `month`, `year` as first-class params
+
+Cost: ~$0.005-0.008/query (vs Serper's ~$0.001). At ~45 queries/run, ~$0.35/run.
+Free tier: 1,000 credits/month. Max 20 results/query.
+
+Recommended approach: keep Serper as primary, add Tavily as a secondary source
+for searches where pre-ranked relevance and built-in content extraction add value.
+
+### Exa for semantic search (later phase)
+Exa (exa.ai) uses neural/semantic search with its own index. Finds content by
+meaning rather than keywords — useful for surfacing pain expressed in vocabulary
+different from our search templates. Best as a complement, not replacement.
+
 ## Running Locally
 
 ```bash

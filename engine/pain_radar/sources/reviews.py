@@ -33,7 +33,9 @@ class ReviewSourcePack(SourcePack):
             try:
                 # Discover review pages via web search
                 if settings.has_serper:
-                    results = await _serper_search(query, settings.serper_api_key)
+                    results = await _serper_search(
+                        query, settings.serper_api_key, settings.search_recency,
+                    )
                 else:
                     results = await _ddg_search(query)
 
@@ -108,12 +110,15 @@ def _extract_review_chunks(text: str, min_length: int = 40) -> list[str]:
     return chunks[:15]
 
 
-async def _serper_search(query: str, api_key: str) -> list[dict]:
+async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
+    payload: dict = {"q": query, "num": 10}
+    if tbs:
+        payload["tbs"] = tbs
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "num": 10},
+            json=payload,
         )
         response.raise_for_status()
         return response.json().get("organic", [])

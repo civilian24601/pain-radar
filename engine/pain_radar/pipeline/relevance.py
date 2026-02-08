@@ -9,6 +9,13 @@ from pain_radar.core.models import Citation
 
 logger = logging.getLogger(__name__)
 
+# Generic words that cause false-positive relevance matches
+_RELEVANCE_STOPWORDS = frozenset({
+    "quote", "tool", "form", "data", "plan", "team", "work",
+    "cost", "time", "help", "free", "best", "easy", "fast",
+    "good", "user", "need", "want", "find", "make",
+})
+
 
 @dataclass
 class TopicRelevanceResult:
@@ -64,25 +71,28 @@ def compute_topic_relevance(
     on_topic: list[int] = []
     off_topic: list[int] = []
 
+    min_matches = 2 if len(normalized_keywords) >= 3 else 1
+
     for i, citation in enumerate(citations):
         # Prefer snapshot raw_text, fall back to excerpt
         text = snapshot_text_by_hash.get(citation.snapshot_hash, "")
         if not text:
             text = citation.excerpt.lower()
 
-        # Check if any keyword (or significant substring) appears
-        hit = False
+        # Count how many keywords (or significant substrings) match
+        matches = 0
         for kw in normalized_keywords:
-            if kw in text:
-                hit = True
-                break
-            # Also check substrings >= 4 chars (handles multi-word keywords)
             kw_words = kw.split()
-            if any(word in text for word in kw_words if len(word) >= 4):
-                hit = True
-                break
+            # Skip keywords that consist entirely of stopwords/short words
+            significant = [w for w in kw_words if len(w) >= 5 and w not in _RELEVANCE_STOPWORDS]
+            if kw in text and (significant or len(kw_words) > 1):
+                # Full keyword match, but only count if it has substance
+                matches += 1
+                continue
+            if significant and any(word in text for word in significant):
+                matches += 1
 
-        if hit:
+        if matches >= min_matches:
             on_topic.append(i)
         else:
             off_topic.append(i)

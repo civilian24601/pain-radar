@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable
@@ -60,26 +61,28 @@ async def collect_all_evidence(
         ReviewSourcePack(),
     ]
 
-    all_citations: list[Citation] = []
-    packs_done = 0
-
-    for pack in packs:
+    # Build tasks for packs that have queries, skip empty ones
+    async def _run_pack(pack: SourcePack) -> list[Citation]:
         pack_queries = queries.get(pack.name, [])
         if not pack_queries:
-            packs_done += 1
-            continue
-
+            return []
         try:
             logger.info(f"Running source pack: {pack.name} with {len(pack_queries)} queries")
             citations = await pack.search(pack_queries, idea, keywords, settings)
-            all_citations.extend(citations)
             logger.info(f"Source pack {pack.name} found {len(citations)} citations")
+            return citations
         except Exception:
             logger.exception(f"Source pack {pack.name} failed")
+            return []
 
-        packs_done += 1
-        if progress_callback:
-            progress_callback(packs_done, len(all_citations))
+    results = await asyncio.gather(*[_run_pack(p) for p in packs])
+
+    all_citations: list[Citation] = []
+    for pack_citations in results:
+        all_citations.extend(pack_citations)
+
+    if progress_callback:
+        progress_callback(len(packs), len(all_citations))
 
     # Store snapshots FIRST (citations have FK to snapshots)
     seen_hashes: set[str] = set()

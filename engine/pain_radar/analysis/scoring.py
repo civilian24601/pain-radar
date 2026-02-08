@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
+from urllib.parse import urlparse
 
 from pain_radar.core.evidence_gate import MAX_RETRIES, validate_output
 from pain_radar.core.models import (
@@ -60,6 +61,32 @@ def compute_recency_weight(
         return 0.3
 
 
+def compute_cluster_confidence(
+    cluster_citation_indices: list[int],
+    citations: list[Citation],
+) -> float:
+    """Deterministic cluster confidence from citation features.
+
+    Weighted average of:
+    - breadth: citation count (capped at 5)
+    - domain_div: unique domains (capped at 3)
+    - type_div: unique source types (capped at 3)
+    - avg_recency: mean recency weight of supporting citations
+    """
+    valid = [citations[i] for i in cluster_citation_indices if 0 <= i < len(citations)]
+    if not valid:
+        return 0.0
+
+    breadth = min(len(valid), 5) / 5.0
+    domains = {urlparse(c.url).netloc for c in valid}
+    domain_div = min(len(domains), 3) / 3.0
+    types = {c.source_type for c in valid}
+    type_div = min(len(types), 3) / 3.0
+    avg_recency = sum(compute_recency_weight(c.date_published) for c in valid) / len(valid)
+
+    return round(0.25 * breadth + 0.25 * domain_div + 0.25 * type_div + 0.25 * avg_recency, 3)
+
+
 async def score_clusters(
     clusters: list[PainCluster],
     citations: list[Citation],
@@ -103,7 +130,9 @@ async def score_clusters(
                     )
 
                     cluster.scores = scores
-                    cluster.confidence = raw.get("confidence", 0.5)
+                    cluster.confidence = compute_cluster_confidence(
+                        cluster.citation_indices, citations
+                    )
                     cluster.recency_weight = avg_recency
                     break
 

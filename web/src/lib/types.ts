@@ -74,6 +74,18 @@ export interface ConflictReport {
   relevance: "strong" | "weak";
 }
 
+export interface EvidenceQualityMetrics {
+  cluster_confidences: number[];
+  median_confidence: number;
+  high_confidence_count: number;
+  total_clusters: number;
+  total_citations: number;
+  unique_domains: number;
+  unique_source_types: number;
+  topic_relevance_ratio: number | null;
+  gate_triggered: string | null;
+}
+
 export interface Verdict {
   decision: VerdictDecision;
   reasons: EvidencedClaim[];
@@ -81,6 +93,7 @@ export interface Verdict {
   narrowest_wedge: string;
   what_would_change: string;
   conflicts: ConflictReport[];
+  evidence_quality_notes: string[];
 }
 
 export interface ValidationPlan {
@@ -136,6 +149,7 @@ export interface ResearchReport {
   evidence_pack: Citation[];
   skeptic_flags: string[];
   conflicts: ConflictReport[];
+  evidence_quality: EvidenceQualityMetrics;
 }
 
 // API types

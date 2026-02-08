@@ -150,10 +150,6 @@ For each dimension, output:
 CRITICAL: citation_indices must be valid indices into the evidence pack.
 Do NOT invent numbers. If citing a statistic, it must appear in the referenced citation.
 
-Also compute:
-- "confidence": 0.0-1.0 based on evidence volume and cross-source corroboration
-- "recency_weight": 0.0-1.0 based on how recent the evidence is
-
 Output a JSON object with all scored dimensions."""
 
 SCORING_USER = """Cluster: {cluster_statement}

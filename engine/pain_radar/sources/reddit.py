@@ -80,7 +80,9 @@ async def _discover_threads(queries: list[str], settings: Settings) -> list[str]
     for query in queries:
         try:
             if settings.has_serper:
-                results = await _serper_reddit_search(query, settings.serper_api_key)
+                results = await _serper_reddit_search(
+                    query, settings.serper_api_key, settings.search_recency,
+                )
             else:
                 results = await _ddg_reddit_search(query)
 
@@ -99,12 +101,15 @@ async def _discover_threads(queries: list[str], settings: Settings) -> list[str]
     return urls
 
 
-async def _serper_reddit_search(query: str, api_key: str) -> list[dict]:
+async def _serper_reddit_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
+    payload: dict = {"q": query, "num": 10}
+    if tbs:
+        payload["tbs"] = tbs
     async with httpx.AsyncClient(timeout=10.0) as client:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
-            json={"q": query, "num": 10},
+            json=payload,
         )
         response.raise_for_status()
         return response.json().get("organic", [])

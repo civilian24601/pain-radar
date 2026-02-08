@@ -44,6 +44,16 @@ export function ReportView({ report }: Props) {
             <h4 className="text-sm font-medium text-zinc-400 mb-1">Top Risks</h4>
             <ClaimList claims={report.verdict.risks} citations={report.evidence_pack} />
           </div>
+          {report.verdict.evidence_quality_notes?.length > 0 && (
+            <div className="mt-3 border border-zinc-800 rounded p-3 bg-zinc-900/50">
+              <h4 className="text-xs font-medium text-zinc-500 mb-1">Evidence Quality</h4>
+              <ul className="list-disc list-inside space-y-0.5">
+                {report.verdict.evidence_quality_notes.map((note, i) => (
+                  <li key={i} className="text-xs text-zinc-500">{note}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <h4 className="text-sm font-medium text-zinc-400 mb-1">Narrowest Wedge</h4>
             <p className="text-sm text-zinc-300">{report.verdict.narrowest_wedge}</p>

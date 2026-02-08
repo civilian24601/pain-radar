@@ -15,6 +15,7 @@ class Settings(BaseSettings):
 
     # Search
     serper_api_key: str = ""  # optional, falls back to DuckDuckGo
+    search_recency: str = "qdr:y2"  # Serper tbs param: qdr:y2 = past 2 years
 
     # Reddit
     reddit_client_id: str = ""  # optional, falls back to HTML fetch

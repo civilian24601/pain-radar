@@ -119,6 +119,7 @@ class ResearchOrchestrator:
                 )
                 from pain_radar.core.models import (
                     EvidencedClaim,
+                    EvidenceQualityMetrics,
                     IdeaBrief,
                     PayabilityAssessment,
                     ResearchReport,
@@ -127,28 +128,34 @@ class ResearchOrchestrator:
                     VerdictDecision,
                 )
 
-                # Find the few relevant citation indices
-                relevant_indices = relevance_result.on_topic_indices[:3] or [0]
+                # Use the first on-topic citation as an honest anchor
+                anchor_indices = relevance_result.on_topic_indices[:1] or [0]
 
                 ie_verdict = Verdict(
                     decision=VerdictDecision.INSUFFICIENT_EVIDENCE,
                     reasons=[EvidencedClaim(
-                        text=(
-                            f"Only {relevance_ratio:.0%} of collected evidence is topically "
-                            f"relevant (threshold: {relevance_threshold:.0%}). The evidence mix "
-                            f"is too diluted with off-topic results for reliable analysis."
-                        ),
-                        citation_indices=relevant_indices,
+                        text="Collected evidence is dominated by off-topic results unrelated to the target problem domain",
+                        citation_indices=anchor_indices,
                     )],
                     risks=[EvidencedClaim(
-                        text="Any analysis on this evidence would be dominated by off-topic signals",
-                        citation_indices=relevant_indices,
+                        text="Any analysis would be driven by signals unrelated to the target workflow",
+                        citation_indices=anchor_indices,
                     )],
+                    evidence_quality_notes=[
+                        f"Topic relevance: {relevance_ratio:.0%} on-topic (threshold: {relevance_threshold:.0%})",
+                        f"On-topic: {len(relevance_result.on_topic_indices)}, off-topic: {len(relevance_result.off_topic_indices)}",
+                    ],
                     narrowest_wedge="Re-run with more specific keywords or niche constraints",
                     what_would_change=(
                         f"Collecting evidence where >{relevance_threshold:.0%} of citations "
                         f"are topically relevant to the core idea"
                     ),
+                )
+
+                eq_metrics = EvidenceQualityMetrics(
+                    total_citations=len(citations),
+                    topic_relevance_ratio=relevance_ratio,
+                    gate_triggered="relevance",
                 )
 
                 ie_plan = ValidationPlan(
@@ -203,6 +210,7 @@ class ResearchOrchestrator:
                         f"(below {relevance_threshold:.0%} threshold)"
                     ],
                     conflicts=[],
+                    evidence_quality=eq_metrics,
                 )
 
                 await self._db.store_report(job_id, report.model_dump_json())
@@ -260,18 +268,32 @@ class ResearchOrchestrator:
                 current_action="Checking evidence quality",
             )
             if scored_clusters:
+                from urllib.parse import urlparse
                 confidences = [c.confidence for c in scored_clusters]
                 median_confidence = sorted(confidences)[len(confidences) // 2]
-                high_conf_count = sum(1 for c in confidences if c >= 0.5)
+                high_conf_count = sum(1 for c in confidences if c >= 0.45)
 
-                if median_confidence < 0.4 or high_conf_count < 2:
+                # Gather citation-level metrics
+                all_cluster_indices: set[int] = set()
+                for cl in scored_clusters:
+                    all_cluster_indices.update(cl.citation_indices)
+                cluster_citations = [
+                    analysis_citations[i]
+                    for i in all_cluster_indices
+                    if 0 <= i < len(analysis_citations)
+                ]
+                unique_domains = len({urlparse(c.url).netloc for c in cluster_citations})
+                unique_source_types = len({c.source_type for c in cluster_citations})
+
+                if median_confidence < 0.35 or high_conf_count < 2:
                     logger.warning(
                         f"Insufficient evidence quality: "
                         f"median_confidence={median_confidence:.2f}, "
-                        f"high_confidence_clusters={high_conf_count}"
+                        f"high_confidence_clusters(>=0.45)={high_conf_count}"
                     )
                     from pain_radar.core.models import (
                         EvidencedClaim,
+                        EvidenceQualityMetrics,
                         IdeaBrief,
                         PayabilityAssessment,
                         ResearchReport,
@@ -281,31 +303,41 @@ class ResearchOrchestrator:
                     )
 
                     best = max(scored_clusters, key=lambda c: c.confidence)
-                    fallback_indices = best.citation_indices[:3] or [0]
+                    anchor_indices = best.citation_indices[:1] or [0]
 
                     ie_verdict = Verdict(
                         decision=VerdictDecision.INSUFFICIENT_EVIDENCE,
                         reasons=[EvidencedClaim(
-                            text=(
-                                f"Median cluster confidence is {median_confidence:.2f} "
-                                f"(threshold: 0.40) and only {high_conf_count} cluster(s) "
-                                f"have confidence >= 0.50 (minimum: 2). Evidence is too "
-                                f"thin or off-topic for reliable analysis."
-                            ),
-                            citation_indices=fallback_indices,
+                            text="Evidence does not demonstrate the target workflow pain from multiple independent sources",
+                            citation_indices=anchor_indices,
                         )],
                         risks=[EvidencedClaim(
-                            text=(
-                                "Clusters generated from this evidence may be based on "
-                                "adjacent or tangential signals rather than direct pain"
-                            ),
-                            citation_indices=fallback_indices,
+                            text="Clusters may reflect adjacent or tangential signals rather than direct user pain",
+                            citation_indices=anchor_indices,
                         )],
+                        evidence_quality_notes=[
+                            f"Median cluster confidence: {median_confidence:.2f} (threshold: 0.35)",
+                            f"High-confidence clusters (>= 0.45): {high_conf_count} (minimum: 2)",
+                            f"Unique domains: {unique_domains}, source types: {unique_source_types}",
+                            "Confidence = f(citation count, domain diversity, source type diversity, recency)",
+                        ],
                         narrowest_wedge="Collect more targeted evidence in the specific problem domain",
                         what_would_change=(
-                            "Evidence with median cluster confidence >= 0.40 and at "
-                            "least 2 clusters with confidence >= 0.50"
+                            "Evidence with median cluster confidence >= 0.35 and at "
+                            "least 2 clusters with confidence >= 0.45"
                         ),
+                    )
+
+                    eq_metrics = EvidenceQualityMetrics(
+                        cluster_confidences=confidences,
+                        median_confidence=median_confidence,
+                        high_confidence_count=high_conf_count,
+                        total_clusters=len(scored_clusters),
+                        total_citations=len(analysis_citations),
+                        unique_domains=unique_domains,
+                        unique_source_types=unique_source_types,
+                        topic_relevance_ratio=relevance_ratio,
+                        gate_triggered="confidence",
                     )
 
                     ie_plan = ValidationPlan(
@@ -320,7 +352,7 @@ class ResearchOrchestrator:
                             "What's most frustrating?"
                         ),
                         success_threshold=(
-                            "Collect evidence achieving median cluster confidence >= 0.40"
+                            "Collect evidence achieving median cluster confidence >= 0.35"
                         ),
                         reversal_criteria=(
                             "Targeted evidence from 3+ independent sources showing "
@@ -352,12 +384,9 @@ class ResearchOrchestrator:
                         verdict=ie_verdict,
                         validation_plan=ie_plan,
                         evidence_pack=citations,
-                        skeptic_flags=[
-                            f"Median cluster confidence: {median_confidence:.2f} "
-                            f"(threshold: 0.40)",
-                            f"High-confidence clusters: {high_conf_count} (minimum: 2)",
-                        ],
+                        skeptic_flags=[],
                         conflicts=[],
+                        evidence_quality=eq_metrics,
                     )
 
                     await self._db.store_report(job_id, report.model_dump_json())
