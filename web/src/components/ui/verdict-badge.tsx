@@ -51,22 +51,29 @@ const VERDICT_CONFIG: Record<
 
 interface VerdictBadgeProps {
   decision: VerdictDecision | string;
+  size?: "default" | "hero";
 }
 
-export function VerdictBadge({ decision }: VerdictBadgeProps) {
+export function VerdictBadge({ decision, size = "default" }: VerdictBadgeProps) {
   const config = VERDICT_CONFIG[decision] || VERDICT_CONFIG.INSUFFICIENT_EVIDENCE;
   const Icon = config.icon;
+
+  const isHero = size === "hero";
 
   return (
     <motion.div
       initial={{ scale: 0.85, opacity: 0 }}
       animate={{ scale: 1, opacity: 1 }}
       transition={{ type: "spring", stiffness: 200, damping: 20, delay: 0.15 }}
-      className={`inline-flex items-center gap-3 rounded-2xl border ${config.borderColor} ${config.bgColor} px-6 py-3`}
-      style={{ boxShadow: `0 0 40px ${config.glowColor}` }}
+      className={`inline-flex items-center rounded-2xl border ${config.borderColor} ${config.bgColor} ${
+        isHero ? "gap-4 px-8 py-5" : "gap-3 px-6 py-3"
+      }`}
+      style={{ boxShadow: `0 0 ${isHero ? "60px" : "40px"} ${config.glowColor}` }}
     >
-      <Icon size={28} className={config.textColor} />
-      <span className={`text-3xl font-bold tracking-tight ${config.textColor}`}>
+      <Icon size={isHero ? 40 : 28} className={config.textColor} />
+      <span className={`font-bold tracking-tight ${config.textColor} ${
+        isHero ? "text-5xl" : "text-3xl"
+      }`}>
         {config.label}
       </span>
     </motion.div>

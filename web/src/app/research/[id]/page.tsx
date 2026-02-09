@@ -27,7 +27,7 @@ export default function ResearchPage({
           : "loading";
 
   return (
-    <main className="min-h-screen flex flex-col items-center px-4 py-12">
+    <main className="min-h-screen flex flex-col items-center px-4 lg:px-8 py-12">
       <a
         href="/"
         className="inline-flex items-center gap-1.5 text-sm text-zinc-500 hover:text-zinc-300 transition-colors mb-8 glass-card px-4 py-2 rounded-full"

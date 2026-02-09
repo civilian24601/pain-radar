@@ -92,6 +92,47 @@ body {
   66%      { transform: translate(-20px, 15px) scale(0.97); }
 }
 
+/* ── Glow variants ───────────────────────────────── */
+.glow-accent {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(129, 140, 248, 0.06);
+}
+.glow-green {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(34, 197, 94, 0.06);
+}
+.glow-red {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(239, 68, 68, 0.06);
+}
+.glow-yellow {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(234, 179, 8, 0.06);
+}
+.glow-orange {
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.03),
+    0 4px 30px rgba(0, 0, 0, 0.3),
+    0 0 40px rgba(249, 115, 22, 0.06);
+}
+
+/* ── Scroll highlight ────────────────────────────── */
+@keyframes highlight-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 transparent; }
+  50% { box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.15); }
+}
+.scroll-highlight {
+  animation: highlight-pulse 1s ease-out 1;
+}
+
 /* ── Accessibility ────────────────────────────────── */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   Download,
@@ -10,29 +10,36 @@ import {
   Globe,
   Star,
   Briefcase,
-  ExternalLink,
-  Check,
-  X as XIcon,
-  Copy,
+  FileText,
+  Layers,
+  TrendingUp,
   Swords,
+  Shield,
+  Target,
+  DollarSign,
+  Clipboard,
+  BookOpen,
+  Check,
+  Copy,
 } from "lucide-react";
 import { getExportUrl } from "@/lib/api-client";
 import type {
   Citation,
-  Competitor,
-  EvidencedClaim,
   PainCluster,
   ResearchReport,
-  ScoredDimension,
   SourceType,
 } from "@/lib/types";
 import { GlassCard } from "@/components/ui/glass-card";
 import { AnimatedCollapsible } from "@/components/ui/animated-collapsible";
 import { VerdictBadge } from "@/components/ui/verdict-badge";
-import { CitationChip } from "@/components/ui/citation-chip";
 import { StrengthBadge } from "@/components/ui/strength-badge";
-import { ScoreGauge } from "@/components/ui/score-gauge";
-import { RadarChart } from "@/components/ui/radar-chart";
+import { MetricTile } from "@/components/ui/metric-tile";
+import { SectionHeader } from "@/components/ui/section-header";
+import { SkepticFlagCard, classifyFlagSeverity } from "@/components/ui/skeptic-flag-card";
+import { ClusterPreviewCard, EmptyClusterSlot } from "@/components/ui/cluster-preview-card";
+import { ClaimList } from "@/components/ui/claim-list";
+import { ClusterCard } from "@/components/ui/cluster-card";
+import { CompetitorCard } from "@/components/ui/competitor-card";
 
 interface Props {
   report: ResearchReport;
@@ -40,7 +47,7 @@ interface Props {
 
 const stagger = {
   hidden: {},
-  visible: { transition: { staggerChildren: 0.08 } },
+  visible: { transition: { staggerChildren: 0.06 } },
 };
 
 const fadeUp = {
@@ -57,24 +64,72 @@ const SOURCE_ICONS: Record<SourceType, typeof Globe> = {
   competitor: Swords,
 };
 
+// ─── Helpers ─────────────────────────────────────────
+function sortByScore(a: PainCluster, b: PainCluster) {
+  const s = (c: PainCluster) =>
+    c.scores.frequency.score + c.scores.severity.score + c.scores.payability.score;
+  return s(b) - s(a);
+}
+
+function confidenceColor(median: number): "green" | "yellow" | "red" | "zinc" {
+  if (median >= 0.5) return "green";
+  if (median >= 0.35) return "yellow";
+  if (median >= 0.2) return "red";
+  return "zinc";
+}
+
 // ─── Main component ─────────────────────────────────
 export function ReportView({ report }: Props) {
+  const [highlightedCluster, setHighlightedCluster] = useState<string | null>(null);
+
+  const coreClusters = report.pain_map
+    .filter((c) => c.category !== "context")
+    .sort(sortByScore);
+  const contextClusters = report.pain_map
+    .filter((c) => c.category === "context")
+    .sort(sortByScore);
+  const top3 = coreClusters.slice(0, 3);
+
+  const totalCitations = report.evidence_pack.length;
+  const uniqueDomains = report.evidence_quality?.unique_domains ?? 0;
+  const medianConf = report.evidence_quality?.median_confidence ?? 0;
+  const medianConfPct = Math.round(medianConf * 100);
+
+  const scrollToCluster = useCallback((clusterId: string) => {
+    setHighlightedCluster(clusterId);
+    const el = document.getElementById(`cluster-${clusterId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(() => setHighlightedCluster(null), 1500);
+    }
+  }, []);
+
   return (
     <motion.div
-      className="w-full max-w-4xl space-y-5"
+      className="w-full max-w-7xl"
       variants={stagger}
       initial="hidden"
       animate="visible"
     >
-      {/* Header */}
-      <motion.div variants={fadeUp} className="flex items-start justify-between">
+      {/* ─── Dashboard Header ──────────────────────────── */}
+      <motion.div variants={fadeUp} className="flex items-start justify-between mb-8">
         <div>
-          <h1 className="text-2xl font-bold text-zinc-100">
-            Research Report
-          </h1>
-          <p className="text-sm text-zinc-500 mt-1">
+          <h1 className="text-3xl font-bold text-zinc-100 tracking-tight">
             {report.idea_brief.one_liner}
-          </p>
+          </h1>
+          <div className="flex items-center gap-2 mt-2 flex-wrap">
+            <span className="rounded-full bg-indigo-400/10 border border-indigo-400/20 px-3 py-1 text-xs text-indigo-400">
+              {report.idea_brief.buyer_persona}
+            </span>
+            {report.idea_brief.keywords.slice(0, 4).map((kw) => (
+              <span
+                key={kw}
+                className="rounded-full bg-zinc-800/60 border border-zinc-700/40 px-2.5 py-0.5 text-[11px] text-zinc-500"
+              >
+                {kw}
+              </span>
+            ))}
+          </div>
         </div>
         <div className="flex gap-2 shrink-0">
           <a
@@ -92,68 +147,153 @@ export function ReportView({ report }: Props) {
         </div>
       </motion.div>
 
-      {/* ─── Verdict Hero ─────────────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard>
-          <div className="text-center mb-6">
-            <VerdictBadge decision={report.verdict.decision} />
-          </div>
-
-          <div className="grid md:grid-cols-2 gap-6">
-            <div>
-              <h3 className="text-sm font-medium text-zinc-400 mb-2">
-                Top Reasons
-              </h3>
-              <ClaimList
-                claims={report.verdict.reasons}
-                citations={report.evidence_pack}
-              />
+      {/* ═══════════════════════════════════════════════════
+          ABOVE THE FOLD — Bento Grid
+          ═══════════════════════════════════════════════════ */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 mb-10">
+        {/* ─── Row 1: Verdict Hero (8 cols) ─────────────── */}
+        <motion.div variants={fadeUp} className="lg:col-span-8">
+          <GlassCard className="h-full flex flex-col justify-center" glow="accent">
+            <div className="text-center mb-5">
+              <VerdictBadge decision={report.verdict.decision} size="hero" />
             </div>
-            <div>
-              <h3 className="text-sm font-medium text-zinc-400 mb-2">
-                Top Risks
-              </h3>
-              <ClaimList
-                claims={report.verdict.risks}
-                citations={report.evidence_pack}
-              />
-            </div>
-          </div>
 
-          {/* Narrowest wedge */}
-          <div className="mt-5 flex items-start gap-2.5 rounded-xl bg-indigo-400/5 border border-indigo-400/15 px-4 py-3">
-            <Zap size={16} className="text-indigo-400 mt-0.5 shrink-0" />
-            <div>
-              <p className="text-xs font-medium text-indigo-400 mb-0.5">
-                Narrowest Wedge
-              </p>
-              <p className="text-sm text-zinc-300">
-                {report.verdict.narrowest_wedge}
+            {/* Narrowest wedge */}
+            <div className="flex items-start gap-2.5 rounded-xl bg-indigo-400/5 border border-indigo-400/15 px-4 py-3">
+              <Zap size={16} className="text-indigo-400 mt-0.5 shrink-0" />
+              <div>
+                <p className="text-xs font-medium text-indigo-400 mb-0.5">
+                  Narrowest Wedge
+                </p>
+                <p className="text-sm text-zinc-300">
+                  {report.verdict.narrowest_wedge}
+                </p>
+              </div>
+            </div>
+
+            {/* What would change */}
+            <div className="mt-3">
+              <h4 className="text-xs font-medium text-zinc-500 mb-1">
+                What Would Change This Verdict
+              </h4>
+              <p className="text-sm text-zinc-400">
+                {report.verdict.what_would_change}
               </p>
             </div>
-          </div>
+          </GlassCard>
+        </motion.div>
 
-          {/* What would change */}
-          <div className="mt-3">
-            <h4 className="text-xs font-medium text-zinc-500 mb-1">
-              What Would Change This Verdict
-            </h4>
-            <p className="text-sm text-zinc-400">
-              {report.verdict.what_would_change}
-            </p>
+        {/* ─── Row 1: Metrics Stack (4 cols) ────────────── */}
+        <motion.div
+          variants={stagger}
+          className="lg:col-span-4 grid grid-cols-2 lg:grid-cols-1 gap-4"
+        >
+          <MetricTile
+            value={totalCitations}
+            label="Citations"
+            icon={FileText}
+            color="accent"
+          />
+          <MetricTile
+            value={uniqueDomains}
+            label="Sources"
+            icon={Globe}
+            color="green"
+          />
+          <MetricTile
+            value={coreClusters.length}
+            label="Pain Clusters"
+            icon={Layers}
+            color="yellow"
+          />
+          <MetricTile
+            value={`${medianConfPct}%`}
+            label="Med. Confidence"
+            icon={TrendingUp}
+            color={confidenceColor(medianConf)}
+          />
+        </motion.div>
+
+        {/* ─── Row 2: Top 3 Cluster Previews ────────────── */}
+        {top3.map((cluster, i) => (
+          <motion.div key={cluster.id} variants={fadeUp} className="lg:col-span-4">
+            <ClusterPreviewCard
+              cluster={cluster}
+              rank={i + 1}
+              onClick={() => scrollToCluster(cluster.id)}
+            />
+          </motion.div>
+        ))}
+        {Array.from({ length: Math.max(0, 3 - top3.length) }).map((_, i) => (
+          <motion.div key={`empty-${i}`} variants={fadeUp} className="lg:col-span-4">
+            <EmptyClusterSlot />
+          </motion.div>
+        ))}
+
+        {/* ─── Row 3: Quick Stats ───────────────────────── */}
+        <motion.div variants={fadeUp} className="lg:col-span-3">
+          <GlassCard hover className="h-full flex flex-col items-center justify-center text-center py-4">
+            <Swords size={18} className="text-zinc-400 opacity-60 mb-2" />
+            <span className="text-2xl font-bold text-zinc-100">{report.competitors.length}</span>
+            <span className="text-[11px] text-zinc-500 uppercase tracking-widest mt-1">Competitors</span>
+          </GlassCard>
+        </motion.div>
+        <motion.div variants={fadeUp} className="lg:col-span-3">
+          <GlassCard hover className="h-full flex flex-col items-center justify-center text-center py-4">
+            <DollarSign size={18} className="text-zinc-400 opacity-60 mb-2" />
+            <div className="mt-1">
+              <StrengthBadge strength={report.payability.overall_strength} />
+            </div>
+            <span className="text-[11px] text-zinc-500 uppercase tracking-widest mt-2">Payability</span>
+          </GlassCard>
+        </motion.div>
+        <motion.div variants={fadeUp} className="lg:col-span-3">
+          <GlassCard hover className="h-full flex flex-col items-center justify-center text-center py-4">
+            <AlertTriangle size={18} className="text-orange-400 opacity-60 mb-2" />
+            <span className="text-2xl font-bold text-zinc-100">{report.skeptic_flags.length}</span>
+            <span className="text-[11px] text-zinc-500 uppercase tracking-widest mt-1">Skeptic Flags</span>
+          </GlassCard>
+        </motion.div>
+        <motion.div variants={fadeUp} className="lg:col-span-3">
+          <GlassCard hover className="h-full flex flex-col items-center justify-center text-center py-4">
+            <Shield size={18} className="text-zinc-400 opacity-60 mb-2" />
+            <span className="text-2xl font-bold text-zinc-100">
+              {report.evidence_quality?.topic_relevance_ratio != null
+                ? `${Math.round(report.evidence_quality.topic_relevance_ratio * 100)}%`
+                : "N/A"}
+            </span>
+            <span className="text-[11px] text-zinc-500 uppercase tracking-widest mt-1">Relevance</span>
+          </GlassCard>
+        </motion.div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════
+          BELOW THE FOLD — Detail Sections
+          ═══════════════════════════════════════════════════ */}
+      <div className="space-y-10">
+        {/* ─── 1. Verdict Details ───────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader icon={Target} title="Verdict Details" color="accent" />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+            <GlassCard>
+              <h3 className="text-sm font-medium text-zinc-400 mb-3">Top Reasons</h3>
+              <ClaimList claims={report.verdict.reasons} citations={report.evidence_pack} />
+            </GlassCard>
+            <GlassCard>
+              <h3 className="text-sm font-medium text-zinc-400 mb-3">Top Risks</h3>
+              <ClaimList claims={report.verdict.risks} citations={report.evidence_pack} />
+            </GlassCard>
           </div>
 
           {/* Evidence quality notes */}
           {report.verdict.evidence_quality_notes?.length > 0 && (
-            <div className="mt-4 neu-inset px-4 py-3">
+            <div className="mt-4 neu-inset px-4 py-3 rounded-xl">
               <h4 className="text-[10px] uppercase tracking-widest text-zinc-600 mb-1.5">
                 Evidence Quality
               </h4>
               <ul className="space-y-0.5">
                 {report.verdict.evidence_quality_notes.map((note, i) => (
-                  <li key={i} className="text-xs text-zinc-500">
-                    {note}
-                  </li>
+                  <li key={i} className="text-xs text-zinc-500">{note}</li>
                 ))}
               </ul>
             </div>
@@ -161,50 +301,41 @@ export function ReportView({ report }: Props) {
 
           {/* Conflicts */}
           {report.conflicts.length > 0 && (
-            <div className="mt-5 pt-4 border-t border-zinc-800/60">
+            <div className="mt-5">
               <h4 className="text-sm font-medium text-amber-400 mb-3">
                 Conflicts ({report.conflicts.length})
               </h4>
-              {report.conflicts
-                .filter((c) => c.relevance === "strong")
-                .map((c, i) => (
-                  <div
-                    key={`strong-${i}`}
-                    className="mb-2 rounded-xl bg-amber-500/5 border border-amber-500/15 p-3"
-                  >
-                    <p className="text-sm text-zinc-300 mb-2">
-                      {c.description}
-                    </p>
-                    <div className="grid grid-cols-2 gap-3 text-xs">
-                      <div className="rounded-lg bg-zinc-900/50 p-2">
-                        <span className="text-zinc-500 font-medium">
-                          Side A:
-                        </span>{" "}
-                        <span className="text-zinc-400">{c.side_a.text}</span>
-                      </div>
-                      <div className="rounded-lg bg-zinc-900/50 p-2">
-                        <span className="text-zinc-500 font-medium">
-                          Side B:
-                        </span>{" "}
-                        <span className="text-zinc-400">{c.side_b.text}</span>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {report.conflicts
+                  .filter((c) => c.relevance === "strong")
+                  .map((c, i) => (
+                    <div
+                      key={`strong-${i}`}
+                      className="rounded-xl bg-amber-500/5 border border-amber-500/15 p-3"
+                    >
+                      <p className="text-sm text-zinc-300 mb-2">{c.description}</p>
+                      <div className="grid grid-cols-2 gap-3 text-xs">
+                        <div className="rounded-lg bg-zinc-900/50 p-2">
+                          <span className="text-zinc-500 font-medium">Side A:</span>{" "}
+                          <span className="text-zinc-400">{c.side_a.text}</span>
+                        </div>
+                        <div className="rounded-lg bg-zinc-900/50 p-2">
+                          <span className="text-zinc-500 font-medium">Side B:</span>{" "}
+                          <span className="text-zinc-400">{c.side_b.text}</span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
-              {report.conflicts.filter((c) => c.relevance !== "strong").length >
-                0 && (
+                  ))}
+              </div>
+              {report.conflicts.filter((c) => c.relevance !== "strong").length > 0 && (
                 <AnimatedCollapsible
                   title={
                     <span className="text-xs text-zinc-600">
-                      {
-                        report.conflicts.filter(
-                          (c) => c.relevance !== "strong"
-                        ).length
-                      }{" "}
+                      {report.conflicts.filter((c) => c.relevance !== "strong").length}{" "}
                       weak conflict(s)
                     </span>
                   }
-                  className="mt-1"
+                  className="mt-2"
                 >
                   {report.conflicts
                     .filter((c) => c.relevance !== "strong")
@@ -222,468 +353,194 @@ export function ReportView({ report }: Props) {
               )}
             </div>
           )}
+        </motion.section>
 
-          {/* Skeptic flags */}
-          {report.skeptic_flags.length > 0 && (
-            <div className="mt-4 pt-4 border-t border-zinc-800/60">
-              <h4 className="text-sm font-medium text-orange-400 mb-2">
-                Skeptic Flags ({report.skeptic_flags.length})
-              </h4>
-              <ul className="space-y-1.5">
-                {report.skeptic_flags.map((flag, i) => (
-                  <li
-                    key={i}
-                    className="flex items-start gap-2 text-sm text-zinc-400"
-                  >
-                    <AlertTriangle
-                      size={14}
-                      className="text-orange-400 mt-0.5 shrink-0"
-                    />
-                    {flag}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </GlassCard>
-      </motion.div>
+        {/* ─── 2. Pain Map ──────────────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader
+            icon={Layers}
+            title="Pain Map"
+            count={coreClusters.length}
+            subtitle="core clusters"
+            color="yellow"
+          />
+          <div className="space-y-3">
+            {coreClusters.map((cluster, i) => (
+              <ClusterCard
+                key={cluster.id}
+                cluster={cluster}
+                citations={report.evidence_pack}
+                rank={i + 1}
+                highlight={highlightedCluster === cluster.id}
+              />
+            ))}
+            {coreClusters.length === 0 && (
+              <GlassCard>
+                <p className="text-sm text-zinc-500">
+                  No idea-specific pain clusters found.
+                </p>
+              </GlassCard>
+            )}
+          </div>
 
-      {/* ─── Pain Map ─────────────────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard padding={false}>
-          {(() => {
-            const coreClusters = report.pain_map.filter(
-              (c) => c.category !== "context"
-            );
-            const contextClusters = report.pain_map.filter(
-              (c) => c.category === "context"
-            );
-            const sortByScore = (a: PainCluster, b: PainCluster) => {
-              const s = (c: PainCluster) =>
-                c.scores.frequency.score +
-                c.scores.severity.score +
-                c.scores.payability.score;
-              return s(b) - s(a);
-            };
-
-            return (
-              <>
-                <AnimatedCollapsible
-                  title={`Pain Map (${coreClusters.length} core cluster${coreClusters.length !== 1 ? "s" : ""})`}
-                  defaultOpen
-                >
-                  <div className="space-y-3">
-                    {[...coreClusters].sort(sortByScore).map((cluster, i) => (
-                      <ClusterCard
-                        key={cluster.id}
-                        cluster={cluster}
-                        citations={report.evidence_pack}
-                        rank={i + 1}
-                      />
-                    ))}
-                    {coreClusters.length === 0 && (
-                      <p className="text-sm text-zinc-500">
-                        No idea-specific pain clusters found.
-                      </p>
-                    )}
-                  </div>
-                </AnimatedCollapsible>
-
-                {contextClusters.length > 0 && (
-                  <div className="border-t border-zinc-800/40">
-                    <AnimatedCollapsible
-                      title={
-                        <span className="text-zinc-500">
-                          Macro Drivers ({contextClusters.length})
-                        </span>
-                      }
-                    >
-                      <p className="text-xs text-zinc-600 mb-3">
-                        Cross-domain pains that inform urgency and payability
-                        but are not product wedges.
-                      </p>
-                      <div className="space-y-3 opacity-80">
-                        {[...contextClusters]
-                          .sort(sortByScore)
-                          .map((cluster, i) => (
-                            <ClusterCard
-                              key={cluster.id}
-                              cluster={cluster}
-                              citations={report.evidence_pack}
-                              rank={coreClusters.length + i + 1}
-                            />
-                          ))}
-                      </div>
-                    </AnimatedCollapsible>
-                  </div>
-                )}
-              </>
-            );
-          })()}
-        </GlassCard>
-      </motion.div>
-
-      {/* ─── Competitors ──────────────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard padding={false}>
-          <AnimatedCollapsible
-            title={`Competitors (${report.competitors.length})`}
-          >
-            {report.competitors.length === 0 ? (
-              <p className="text-sm text-zinc-500">
-                No competitors identified in evidence.
+          {contextClusters.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-sm font-medium text-zinc-500 mb-3">
+                Macro Drivers ({contextClusters.length})
+              </h3>
+              <p className="text-xs text-zinc-600 mb-3">
+                Cross-domain pains that inform urgency and payability but are not product wedges.
               </p>
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {report.competitors.map((comp) => (
-                  <CompetitorCard
-                    key={comp.name}
-                    competitor={comp}
+              <div className="space-y-3 opacity-80">
+                {contextClusters.map((cluster, i) => (
+                  <ClusterCard
+                    key={cluster.id}
+                    cluster={cluster}
                     citations={report.evidence_pack}
+                    rank={coreClusters.length + i + 1}
                   />
                 ))}
               </div>
-            )}
-          </AnimatedCollapsible>
-        </GlassCard>
-      </motion.div>
+            </div>
+          )}
+        </motion.section>
 
-      {/* ─── Payability ───────────────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard padding={false}>
-          <AnimatedCollapsible title="Payability Signals">
+        {/* ─── 3. Competitors ───────────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader
+            icon={Swords}
+            title="Competitors"
+            count={report.competitors.length}
+            color="red"
+          />
+          {report.competitors.length === 0 ? (
+            <GlassCard>
+              <p className="text-sm text-zinc-500">No competitors identified in evidence.</p>
+            </GlassCard>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {report.competitors.map((comp) => (
+                <CompetitorCard
+                  key={comp.name}
+                  competitor={comp}
+                  citations={report.evidence_pack}
+                />
+              ))}
+            </div>
+          )}
+        </motion.section>
+
+        {/* ─── 4. Skeptic Flags ─────────────────────────── */}
+        {report.skeptic_flags.length > 0 && (
+          <motion.section variants={fadeUp}>
+            <SectionHeader
+              icon={AlertTriangle}
+              title="Skeptic Flags"
+              count={report.skeptic_flags.length}
+              color="orange"
+            />
+            {/* Severity summary badges */}
+            {(() => {
+              const flags = report.skeptic_flags.map((f) => ({
+                text: f,
+                severity: classifyFlagSeverity(f),
+              }));
+              const highCount = flags.filter((f) => f.severity === "high").length;
+              const medCount = flags.filter((f) => f.severity === "medium").length;
+              const lowCount = flags.filter((f) => f.severity === "low").length;
+
+              return (
+                <>
+                  <div className="flex gap-2 mb-4">
+                    {highCount > 0 && (
+                      <span className="rounded-full bg-red-500/10 border border-red-500/20 px-3 py-1 text-xs text-red-400 font-medium">
+                        {highCount} high
+                      </span>
+                    )}
+                    {medCount > 0 && (
+                      <span className="rounded-full bg-amber-500/10 border border-amber-500/20 px-3 py-1 text-xs text-amber-400 font-medium">
+                        {medCount} medium
+                      </span>
+                    )}
+                    {lowCount > 0 && (
+                      <span className="rounded-full bg-zinc-700/50 border border-zinc-600/30 px-3 py-1 text-xs text-zinc-500 font-medium">
+                        {lowCount} low
+                      </span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {flags.map((f, i) => (
+                      <SkepticFlagCard key={i} flag={f.text} severity={f.severity} />
+                    ))}
+                  </div>
+                </>
+              );
+            })()}
+          </motion.section>
+        )}
+
+        {/* ─── 5. Payability ────────────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader icon={DollarSign} title="Payability Signals" color="green" />
+          <GlassCard>
             <div className="mb-3">
               <StrengthBadge strength={report.payability.overall_strength} />
-              <p className="mt-2 text-sm text-zinc-400">
-                {report.payability.summary}
-              </p>
+              <p className="mt-2 text-sm text-zinc-400">{report.payability.summary}</p>
             </div>
-            {report.payability.hiring_signals.length > 0 && (
-              <div className="mb-3">
-                <h4 className="text-xs font-medium text-zinc-500 mb-1.5">
-                  Hiring Signals
-                </h4>
-                <ClaimList
-                  claims={report.payability.hiring_signals}
-                  citations={report.evidence_pack}
-                />
-              </div>
-            )}
-            {report.payability.outsourcing_signals.length > 0 && (
-              <div className="mb-3">
-                <h4 className="text-xs font-medium text-zinc-500 mb-1.5">
-                  Outsourcing Signals
-                </h4>
-                <ClaimList
-                  claims={report.payability.outsourcing_signals}
-                  citations={report.evidence_pack}
-                />
-              </div>
-            )}
-            {report.payability.template_sop_signals.length > 0 && (
-              <div>
-                <h4 className="text-xs font-medium text-zinc-500 mb-1.5">
-                  Template / SOP Signals
-                </h4>
-                <ClaimList
-                  claims={report.payability.template_sop_signals}
-                  citations={report.evidence_pack}
-                />
-              </div>
-            )}
-          </AnimatedCollapsible>
-        </GlassCard>
-      </motion.div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {report.payability.hiring_signals.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-zinc-500 mb-1.5">Hiring Signals</h4>
+                  <ClaimList claims={report.payability.hiring_signals} citations={report.evidence_pack} />
+                </div>
+              )}
+              {report.payability.outsourcing_signals.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-zinc-500 mb-1.5">Outsourcing Signals</h4>
+                  <ClaimList claims={report.payability.outsourcing_signals} citations={report.evidence_pack} />
+                </div>
+              )}
+              {report.payability.template_sop_signals.length > 0 && (
+                <div>
+                  <h4 className="text-xs font-medium text-zinc-500 mb-1.5">Template / SOP Signals</h4>
+                  <ClaimList claims={report.payability.template_sop_signals} citations={report.evidence_pack} />
+                </div>
+              )}
+            </div>
+          </GlassCard>
+        </motion.section>
 
-      {/* ─── 7-Day Validation Plan ────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard padding={false}>
-          <AnimatedCollapsible title="7-Day Validation Plan" defaultOpen>
-            <ValidationPlanView plan={report.validation_plan} />
-          </AnimatedCollapsible>
-        </GlassCard>
-      </motion.div>
+        {/* ─── 6. Validation Plan ───────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader icon={Clipboard} title="7-Day Validation Plan" color="accent" />
+          <div className="max-w-4xl mx-auto">
+            <GlassCard>
+              <ValidationPlanView plan={report.validation_plan} />
+            </GlassCard>
+          </div>
+        </motion.section>
 
-      {/* ─── Evidence Appendix ────────────────────────── */}
-      <motion.div variants={fadeUp}>
-        <GlassCard padding={false}>
-          <AnimatedCollapsible
-            title={`Evidence Appendix (${report.evidence_pack.length} citations)`}
-          >
-            <EvidenceList
-              citations={report.evidence_pack}
-              jobId={report.id}
-            />
-          </AnimatedCollapsible>
-        </GlassCard>
-      </motion.div>
+        {/* ─── 7. Evidence Appendix ─────────────────────── */}
+        <motion.section variants={fadeUp}>
+          <SectionHeader
+            icon={BookOpen}
+            title="Evidence Appendix"
+            count={report.evidence_pack.length}
+            subtitle="citations"
+            color="accent"
+          />
+          <GlassCard padding={false}>
+            <AnimatedCollapsible title="Browse citations" defaultOpen={false}>
+              <EvidenceList citations={report.evidence_pack} jobId={report.id} />
+            </AnimatedCollapsible>
+          </GlassCard>
+        </motion.section>
+      </div>
     </motion.div>
   );
 }
 
-// ─── Sub-components ──────────────────────────────────
-
-function ClaimList({
-  claims,
-  citations,
-}: {
-  claims: EvidencedClaim[];
-  citations: Citation[];
-}) {
-  return (
-    <ul className="space-y-3">
-      {claims.map((claim, i) => (
-        <li key={i}>
-          <p className="text-sm text-zinc-300 leading-relaxed">
-            {claim.text}
-            <span className="ml-1.5 inline-flex gap-1">
-              {claim.citation_indices.map((idx) => (
-                <CitationChip
-                  key={idx}
-                  index={idx}
-                  url={citations[idx]?.url || "#"}
-                  excerpt={citations[idx]?.excerpt}
-                />
-              ))}
-            </span>
-          </p>
-          {claim.evidence_excerpts && claim.evidence_excerpts.length > 0 && (
-            <div className="mt-1.5 ml-3 space-y-1">
-              {claim.evidence_excerpts.map((excerpt, ei) => (
-                <p
-                  key={ei}
-                  className="neu-inset rounded-lg px-3 py-1.5 text-xs italic text-zinc-400 leading-relaxed"
-                >
-                  &ldquo;{excerpt}&rdquo;
-                </p>
-              ))}
-            </div>
-          )}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-function ClusterCard({
-  cluster,
-  citations,
-  rank,
-}: {
-  cluster: PainCluster;
-  citations: Citation[];
-  rank: number;
-}) {
-  const [expanded, setExpanded] = useState(rank <= 3);
-
-  const dims: { key: string; label: string; dim: ScoredDimension }[] = [
-    { key: "freq", label: "Frequency", dim: cluster.scores.frequency },
-    { key: "sev", label: "Severity", dim: cluster.scores.severity },
-    { key: "urg", label: "Urgency", dim: cluster.scores.urgency },
-    { key: "pay", label: "Payability", dim: cluster.scores.payability },
-    { key: "wac", label: "Workaround", dim: cluster.scores.workaround_cost },
-    { key: "sat", label: "Saturation", dim: cluster.scores.saturation },
-    { key: "acc", label: "Access", dim: cluster.scores.accessibility },
-  ];
-
-  const radarData = dims.map((d) => ({
-    dimension: d.label,
-    score: d.dim.score,
-  }));
-
-  // Confidence bar width
-  const confPct = Math.round(cluster.confidence * 100);
-
-  return (
-    <div className="neu-card overflow-hidden">
-      {/* Header — always visible */}
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        className="w-full text-left px-4 py-3 flex items-start gap-3"
-      >
-        <span className="text-xs font-mono text-zinc-600 mt-0.5">
-          #{rank}
-        </span>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm text-zinc-200 leading-snug">
-            {cluster.statement.text}
-          </p>
-          <div className="flex items-center gap-3 mt-1.5">
-            <span className="text-xs text-zinc-500">{cluster.who}</span>
-            {cluster.category === "context" && (
-              <span className="rounded-full bg-zinc-700/50 px-2 py-0.5 text-[10px] text-zinc-500">
-                macro driver
-              </span>
-            )}
-            {/* Confidence bar */}
-            <div className="flex items-center gap-1.5 flex-1 max-w-[120px]">
-              <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-indigo-400/60"
-                  style={{ width: `${confPct}%` }}
-                />
-              </div>
-              <span className="text-[10px] font-mono text-zinc-600">
-                {confPct}%
-              </span>
-            </div>
-          </div>
-        </div>
-      </button>
-
-      {/* Expanded content */}
-      {expanded && (
-        <div className="px-4 pb-4 space-y-4 border-t border-zinc-800/40">
-          {/* Radar chart + score gauges */}
-          <div className="pt-4 flex flex-col sm:flex-row items-center gap-4">
-            <div className="w-full sm:w-1/2">
-              <RadarChart data={radarData} />
-            </div>
-            <div className="grid grid-cols-4 gap-3 w-full sm:w-1/2">
-              {dims.map((d) => (
-                <ScoreGauge
-                  key={d.key}
-                  score={d.dim.score}
-                  label={d.label}
-                />
-              ))}
-              <ScoreGauge
-                score={Math.round(cluster.recency_weight * 5)}
-                label="Recency"
-              />
-            </div>
-          </div>
-
-          {/* Meta */}
-          <div className="flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-zinc-800 px-2.5 py-1 text-zinc-400">
-              Trigger: {cluster.trigger}
-            </span>
-            {cluster.workarounds.map((w, i) => (
-              <span
-                key={i}
-                className="rounded-full bg-zinc-800 px-2.5 py-1 text-zinc-500"
-              >
-                {w}
-              </span>
-            ))}
-          </div>
-
-          {/* Citation excerpts */}
-          <div className="flex flex-wrap gap-1">
-            {cluster.citation_indices.slice(0, 5).map((idx) => (
-              <CitationChip
-                key={idx}
-                index={idx}
-                url={citations[idx]?.url || "#"}
-                excerpt={citations[idx]?.excerpt}
-              />
-            ))}
-            {cluster.citation_indices.length > 5 && (
-              <span className="text-[10px] text-zinc-600 self-center">
-                +{cluster.citation_indices.length - 5} more
-              </span>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function CompetitorCard({
-  competitor,
-  citations,
-}: {
-  competitor: Competitor;
-  citations: Citation[];
-}) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="neu-card p-4">
-      <div className="flex items-start justify-between mb-2">
-        <a
-          href={competitor.url}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="text-sm font-medium text-zinc-200 hover:text-indigo-400 inline-flex items-center gap-1 transition-colors"
-        >
-          {competitor.name}
-          <ExternalLink size={12} />
-        </a>
-        <span
-          className={`inline-flex items-center gap-1 text-[10px] font-medium ${competitor.pricing_page_exists ? "text-green-400" : "text-zinc-600"}`}
-        >
-          {competitor.pricing_page_exists ? (
-            <>
-              <Check size={10} /> Pricing
-            </>
-          ) : (
-            <>
-              <XIcon size={10} /> No pricing
-            </>
-          )}
-        </span>
-      </div>
-      <p className="text-xs text-zinc-500 mb-2 line-clamp-2">
-        {competitor.positioning}
-      </p>
-      <div className="flex items-center gap-2 text-xs flex-wrap">
-        {competitor.relationship && (
-          <span
-            className={`rounded-full px-2 py-0.5 font-medium ${
-              competitor.relationship === "direct"
-                ? "bg-red-400/10 text-red-400 border border-red-400/20"
-                : competitor.relationship === "substitute"
-                  ? "bg-amber-400/10 text-amber-400 border border-amber-400/20"
-                  : "bg-zinc-700/50 text-zinc-500 border border-zinc-600/30"
-            }`}
-          >
-            {competitor.relationship}
-          </span>
-        )}
-        {competitor.min_price_observed && (
-          <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-zinc-400">
-            {competitor.min_price_observed}
-          </span>
-        )}
-        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-zinc-500 capitalize">
-          {competitor.onboarding_model.replace("_", " ")}
-        </span>
-      </div>
-
-      {(competitor.strengths.length > 0 ||
-        competitor.weaknesses.length > 0) && (
-        <button
-          type="button"
-          onClick={() => setExpanded(!expanded)}
-          className="text-[10px] text-zinc-600 hover:text-zinc-400 mt-2 transition-colors"
-        >
-          {expanded ? "Hide details" : "Show strengths & weaknesses"}
-        </button>
-      )}
-
-      {expanded && (
-        <div className="mt-2 space-y-2 text-xs">
-          {competitor.strengths.length > 0 && (
-            <div>
-              <span className="text-green-400/80 font-medium">Strengths:</span>
-              <ClaimList claims={competitor.strengths} citations={citations} />
-            </div>
-          )}
-          {competitor.weaknesses.length > 0 && (
-            <div>
-              <span className="text-red-400/80 font-medium">Weaknesses:</span>
-              <ClaimList claims={competitor.weaknesses} citations={citations} />
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
+// ─── Validation Plan ──────────────────────────────────
 
 function ValidationPlanView({
   plan,
@@ -710,10 +567,7 @@ function ValidationPlanView({
       ? { label: "Interview Script", script: plan.interview_script }
       : null,
     plan.landing_page_hypotheses.length > 0
-      ? {
-          label: "Landing Page Hypotheses",
-          list: plan.landing_page_hypotheses,
-        }
+      ? { label: "Landing Page Hypotheses", list: plan.landing_page_hypotheses }
       : null,
     plan.concierge_procedure
       ? { label: "Concierge MVP", content: plan.concierge_procedure }
@@ -729,7 +583,6 @@ function ValidationPlanView({
     <div className="space-y-0">
       {sections.map((sec, i) => (
         <div key={sec.label} className="flex gap-4">
-          {/* Step number */}
           <div className="flex flex-col items-center">
             <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-indigo-400/10 text-xs font-bold text-indigo-400">
               {i + 1}
@@ -738,8 +591,6 @@ function ValidationPlanView({
               <div className="w-px flex-1 bg-zinc-800/60" />
             )}
           </div>
-
-          {/* Content */}
           <div className="pb-5 flex-1 min-w-0">
             <h4 className="text-sm font-medium text-zinc-400 mb-1">
               {sec.label}
@@ -772,7 +623,6 @@ function ValidationPlanView({
         </div>
       ))}
 
-      {/* Success threshold */}
       <div className="rounded-xl bg-green-500/5 border border-green-500/15 px-4 py-3 mt-2">
         <h4 className="text-xs font-medium text-green-400 mb-0.5">
           Success Threshold
@@ -782,7 +632,6 @@ function ValidationPlanView({
         </p>
       </div>
 
-      {/* Reversal criteria */}
       {plan.reversal_criteria && (
         <div className="rounded-xl bg-red-500/5 border border-red-500/15 px-4 py-3 mt-2">
           <h4 className="text-xs font-medium text-red-400 mb-0.5">
@@ -795,6 +644,8 @@ function ValidationPlanView({
   );
 }
 
+// ─── Evidence List ────────────────────────────────────
+
 function EvidenceList({
   citations,
   jobId,
@@ -805,13 +656,12 @@ function EvidenceList({
   const [search, setSearch] = useState("");
   const [filterType, setFilterType] = useState<string>("all");
 
-  const filtered = citations.filter((c, _idx) => {
+  const filtered = citations.filter((c) => {
     const matchesSearch =
       !search ||
       c.excerpt.toLowerCase().includes(search.toLowerCase()) ||
       c.url.toLowerCase().includes(search.toLowerCase());
-    const matchesType =
-      filterType === "all" || c.source_type === filterType;
+    const matchesType = filterType === "all" || c.source_type === filterType;
     return matchesSearch && matchesType;
   });
 
@@ -826,7 +676,6 @@ function EvidenceList({
 
   return (
     <div className="space-y-3">
-      {/* Search + export */}
       <div className="flex gap-2">
         <input
           type="text"
@@ -849,7 +698,6 @@ function EvidenceList({
         </a>
       </div>
 
-      {/* Filter pills */}
       <div className="flex flex-wrap gap-1.5">
         {sourceTypes.map((st) => (
           <button
@@ -867,7 +715,6 @@ function EvidenceList({
         ))}
       </div>
 
-      {/* Citation cards */}
       <div className="max-h-96 overflow-y-auto space-y-2 pr-1">
         {filtered.map((c) => {
           const globalIdx = citations.indexOf(c);
@@ -879,17 +726,13 @@ function EvidenceList({
               className="rounded-xl border border-zinc-800/50 bg-zinc-900/30 p-3 text-xs"
             >
               <div className="flex items-start justify-between mb-1.5">
-                <span className="font-mono text-indigo-400/80">
-                  [{globalIdx}]
-                </span>
+                <span className="font-mono text-indigo-400/80">[{globalIdx}]</span>
                 <span className="inline-flex items-center gap-1 text-zinc-600 capitalize">
                   <Icon size={11} />
                   {c.source_type.replace("_", " ")}
                 </span>
               </div>
-              <p className="text-zinc-400 mb-1.5 leading-relaxed">
-                {c.excerpt}
-              </p>
+              <p className="text-zinc-400 mb-1.5 leading-relaxed">{c.excerpt}</p>
               <div className="flex items-center justify-between">
                 <a
                   href={c.url}
@@ -900,9 +743,7 @@ function EvidenceList({
                   {c.url}
                 </a>
                 {c.date_published && (
-                  <span className="text-zinc-600 shrink-0 ml-2">
-                    {c.date_published}
-                  </span>
+                  <span className="text-zinc-600 shrink-0 ml-2">{c.date_published}</span>
                 )}
               </div>
             </div>
