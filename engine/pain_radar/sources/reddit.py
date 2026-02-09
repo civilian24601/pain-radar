@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timezone
@@ -33,79 +34,107 @@ class RedditSourcePack(SourcePack):
         keywords: list[str],
         settings: Settings,
     ) -> list[Citation]:
-        # Phase 1: DISCOVERY — find Reddit thread URLs via web search
-        thread_urls = await _discover_threads(queries, settings)
-        logger.info(f"Reddit discovery found {len(thread_urls)} threads")
+        fetch_sem = asyncio.Semaphore(10)
 
-        if not thread_urls:
-            return []
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"User-Agent": "PainRadar/0.1 (research tool)"},
+        ) as client:
+            # Phase 1: DISCOVERY — find Reddit thread URLs via web search
+            thread_urls = await _discover_threads(queries, settings, client=client)
+            logger.info(f"Reddit discovery found {len(thread_urls)} threads")
 
-        # Phase 2: FETCH — get actual post + comments content
+            if not thread_urls:
+                return []
+
+            # Phase 2: FETCH — get actual post + comments content (parallel)
+            async def _fetch_thread(url: str) -> list[Citation]:
+                try:
+                    async with fetch_sem:
+                        if settings.has_reddit:
+                            snapshot = await _fetch_via_api(url, settings, client=client)
+                        else:
+                            snapshot = await _fetch_via_html(url, settings, client=client)
+
+                    if not snapshot:
+                        return []
+
+                    chunks = _extract_meaningful_chunks(snapshot.raw_text)
+                    return [
+                        Citation(
+                            url=url,
+                            excerpt=chunk,
+                            source_type=SourceType.REDDIT,
+                            date_published=None,
+                            date_retrieved=datetime.now(timezone.utc).isoformat(),
+                            recency_months=None,
+                            snapshot_hash=snapshot.content_hash,
+                        )
+                        for chunk in chunks
+                    ]
+                except Exception:
+                    logger.exception(f"Reddit fetch failed for: {url}")
+                    return []
+
+            all_results = await asyncio.gather(
+                *[_fetch_thread(url) for url in thread_urls[:15]]
+            )
+
         citations: list[Citation] = []
-        for url in thread_urls[:15]:  # Cap at 15 threads
-            try:
-                if settings.has_reddit:
-                    snapshot = await _fetch_via_api(url, settings)
-                else:
-                    snapshot = await _fetch_via_html(url, settings)
-
-                if not snapshot:
-                    continue
-
-                # Extract evidence from the snapshot text
-                # For now, take meaningful chunks; LLM extraction refines later
-                chunks = _extract_meaningful_chunks(snapshot.raw_text)
-                for chunk in chunks:
-                    citations.append(Citation(
-                        url=url,
-                        excerpt=chunk,
-                        source_type=SourceType.REDDIT,
-                        date_published=None,
-                        date_retrieved=datetime.now(timezone.utc).isoformat(),
-                        recency_months=None,
-                        snapshot_hash=snapshot.content_hash,
-                    ))
-
-            except Exception:
-                logger.exception(f"Reddit fetch failed for: {url}")
-
+        for batch in all_results:
+            citations.extend(batch)
         return citations
 
 
-async def _discover_threads(queries: list[str], settings: Settings) -> list[str]:
+async def _discover_threads(
+    queries: list[str], settings: Settings,
+    client: httpx.AsyncClient | None = None,
+) -> list[str]:
     """Use web search to discover Reddit thread URLs. SERP snippets NOT used as evidence."""
+    sem = asyncio.Semaphore(5)
     urls: list[str] = []
     seen: set[str] = set()
+    lock = asyncio.Lock()
 
-    for query in queries:
+    async def _search_one(query: str) -> None:
         try:
             if settings.has_serper:
-                results = await _serper_reddit_search(
-                    query, settings.serper_api_key, settings.search_recency,
-                )
+                async with sem:
+                    results = await _serper_reddit_search(
+                        query, settings.serper_api_key, settings.search_recency,
+                        client=client,
+                    )
             else:
                 results = await _ddg_reddit_search(query)
 
-            for r in results:
-                url = r.get("link") or r.get("url", "")
-                # Normalize to canonical thread URL
-                match = _REDDIT_THREAD_PATTERN.search(url)
-                if match:
-                    canonical = match.group(0)
-                    if canonical not in seen:
-                        seen.add(canonical)
-                        urls.append(canonical)
+            async with lock:
+                for r in results:
+                    url = r.get("link") or r.get("url", "")
+                    match = _REDDIT_THREAD_PATTERN.search(url)
+                    if match:
+                        canonical = match.group(0)
+                        if canonical not in seen:
+                            seen.add(canonical)
+                            urls.append(canonical)
         except Exception:
             logger.exception(f"Reddit discovery failed for query: {query}")
 
+    await asyncio.gather(*[_search_one(q) for q in queries])
     return urls
 
 
-async def _serper_reddit_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
+async def _serper_reddit_search(
+    query: str, api_key: str, tbs: str = "",
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     payload: dict = {"q": query, "num": 10}
     if tbs:
         payload["tbs"] = tbs
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=10.0)
+    try:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
@@ -113,6 +142,9 @@ async def _serper_reddit_search(query: str, api_key: str, tbs: str = "") -> list
         )
         response.raise_for_status()
         return response.json().get("organic", [])
+    finally:
+        if own_client:
+            await client.aclose()
 
 
 async def _ddg_reddit_search(query: str) -> list[dict]:
@@ -126,7 +158,10 @@ async def _ddg_reddit_search(query: str) -> list[dict]:
         return []
 
 
-async def _fetch_via_api(url: str, settings: Settings):
+async def _fetch_via_api(
+    url: str, settings: Settings,
+    client: httpx.AsyncClient | None = None,
+):
     """Fetch Reddit post + top comments via Reddit API."""
     from pain_radar.sources.snapshot import SourceSnapshot
     import hashlib
@@ -138,8 +173,12 @@ async def _fetch_via_api(url: str, settings: Settings):
 
     post_id = match.group(1)
 
-    # Get OAuth token
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=10.0)
+
+    try:
+        # Get OAuth token
         auth_resp = await client.post(
             "https://www.reddit.com/api/v1/access_token",
             auth=(settings.reddit_client_id, settings.reddit_client_secret),
@@ -159,6 +198,9 @@ async def _fetch_via_api(url: str, settings: Settings):
         )
         resp.raise_for_status()
         data = resp.json()
+    finally:
+        if own_client:
+            await client.aclose()
 
     # Build text from post + comments
     lines = []
@@ -198,11 +240,14 @@ async def _fetch_via_api(url: str, settings: Settings):
     )
 
 
-async def _fetch_via_html(url: str, settings: Settings):
+async def _fetch_via_html(
+    url: str, settings: Settings,
+    client: httpx.AsyncClient | None = None,
+):
     """Fallback: fetch Reddit thread HTML directly."""
     # Use old.reddit.com for simpler HTML
     old_url = url.replace("www.reddit.com", "old.reddit.com")
-    return await fetch_and_store(old_url, settings.snapshots_dir)
+    return await fetch_and_store(old_url, settings.snapshots_dir, client=client)
 
 
 def _extract_meaningful_chunks(text: str, min_length: int = 50) -> list[str]:

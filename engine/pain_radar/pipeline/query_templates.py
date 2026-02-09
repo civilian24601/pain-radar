@@ -243,4 +243,28 @@ async def generate_queries(
     except Exception:
         logger.warning("Niche query refinement failed, using templates only")
 
+    # Dedup + cap per pack (base templates added first, so they survive the cap)
+    PACK_CAPS = {"reddit": 12, "web": 15, "review": 10, "hiring": 8}
+    for pack_name, cap in PACK_CAPS.items():
+        raw = queries.get(pack_name, [])
+        if not raw:
+            continue
+        before = len(raw)
+        # Deduplicate preserving insertion order via normalized lowercase
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for q in raw:
+            key = q.strip().lower()
+            if key not in seen:
+                seen.add(key)
+                deduped.append(q)
+        # Cap at limit (base templates are first, so niche/LLM additions trimmed)
+        capped = deduped[:cap]
+        queries[pack_name] = capped
+        if before != len(capped):
+            logger.info(
+                f"Query dedup+cap [{pack_name}]: {before} → {len(capped)} "
+                f"(deduped {before - len(deduped)}, capped {len(deduped) - len(capped)})"
+            )
+
     return queries

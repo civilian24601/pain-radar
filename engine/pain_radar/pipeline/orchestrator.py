@@ -44,7 +44,7 @@ class ResearchOrchestrator:
         task.add_done_callback(lambda t: self._tasks.pop(job_id, None))
 
     async def _update_progress(
-        self, job_id: str, stage: str, **kwargs: int | str
+        self, job_id: str, stage: str, **kwargs
     ) -> None:
         progress = JobProgress(stage=stage, **kwargs)
         await self._db.update_job_progress(job_id, progress.model_dump())
@@ -81,9 +81,25 @@ class ResearchOrchestrator:
             queries = await generate_queries(idea, options, llm, idea_brief=idea_brief)
 
             # Stage 3: EVIDENCE COLLECTION
+            pack_status: dict[str, str] = {}
+            packs_done = 0
+
+            async def _pack_progress(pack_name: str, status_msg: str) -> None:
+                nonlocal packs_done
+                pack_status[pack_name] = status_msg
+                if "done" in status_msg or "failed" in status_msg or "skipped" in status_msg:
+                    packs_done += 1
+                await self._update_progress(
+                    job_id, "evidence_collection",
+                    source_packs_total=3,
+                    source_packs_done=packs_done,
+                    current_action=f"Collecting evidence from sources",
+                    pack_status=pack_status,
+                )
+
             await self._update_progress(
                 job_id, "evidence_collection",
-                source_packs_total=4,
+                source_packs_total=3,
                 source_packs_done=0,
                 current_action="Collecting evidence from sources",
             )
@@ -93,7 +109,7 @@ class ResearchOrchestrator:
                 queries=queries,
                 db=self._db,
                 settings=self._settings,
-                progress_callback=None,
+                progress_callback=_pack_progress,
             )
 
             if not citations:
@@ -245,6 +261,8 @@ class ResearchOrchestrator:
 
             # Stage 4: ANALYSIS
             await self._db.update_job_status(job_id, JobStatus.ANALYZING.value)
+
+            # Stage A: cluster_evidence (must complete first)
             await self._update_progress(
                 job_id, "analysis",
                 citations_found=len(citations),
@@ -254,13 +272,28 @@ class ResearchOrchestrator:
             from pain_radar.analysis.clustering import cluster_evidence
             clusters = await cluster_evidence(analysis_citations, idea, options, llm, idea_brief=idea_brief)
 
+            # Stage B: score + competitors + payability in parallel
             await self._update_progress(
                 job_id, "analysis",
                 citations_found=len(citations),
-                current_action="Scoring clusters",
+                current_action="Scoring clusters, analyzing competitors & payability",
             )
-            from pain_radar.analysis.scoring import score_clusters
-            scored_clusters = await score_clusters(clusters, analysis_citations, llm)
+            from pain_radar.analysis.scoring import score_clusters, assess_payability
+            from pain_radar.analysis.clustering import extract_competitors
+
+            async def _scoring_progress(done: int, total: int) -> None:
+                await self._update_progress(
+                    job_id, "analysis",
+                    citations_found=len(citations),
+                    current_action=f"Scoring cluster {done}/{total}",
+                    scoring_progress=f"{done}/{total}",
+                )
+
+            scored_clusters, competitors, payability = await asyncio.gather(
+                score_clusters(clusters, analysis_citations, llm, on_progress=_scoring_progress),
+                extract_competitors(analysis_citations, idea, options, llm, idea_brief=idea_brief),
+                assess_payability(analysis_citations, idea, llm),
+            )
 
             # Post-scoring evidence quality check
             await self._update_progress(
@@ -295,7 +328,7 @@ class ResearchOrchestrator:
                     from pain_radar.core.models import (
                         EvidencedClaim,
                         EvidenceQualityMetrics,
-                        PayabilityAssessment,
+                        PayabilityAssessment as PayabilityModel,
                         ResearchReport,
                         ValidationPlan,
                         Verdict,
@@ -364,7 +397,7 @@ class ResearchOrchestrator:
                         id=job_id,
                         idea_brief=idea_brief,
                         pain_map=scored_clusters,
-                        payability=PayabilityAssessment(
+                        payability=PayabilityModel(
                             hiring_signals=[],
                             outsourcing_signals=[],
                             template_sop_signals=[],
@@ -386,17 +419,6 @@ class ResearchOrchestrator:
                         job_id, "complete", citations_found=len(citations)
                     )
                     return
-
-            await self._update_progress(
-                job_id, "analysis",
-                citations_found=len(citations),
-                current_action="Analyzing competitors",
-            )
-            from pain_radar.analysis.clustering import extract_competitors
-            competitors = await extract_competitors(analysis_citations, idea, options, llm, idea_brief=idea_brief)
-
-            from pain_radar.analysis.scoring import assess_payability
-            payability = await assess_payability(analysis_citations, idea, llm)
 
             # Stage 5: CONFLICT DETECTION
             await self._update_progress(

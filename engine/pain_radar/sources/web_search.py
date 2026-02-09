@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -27,40 +28,40 @@ class WebSearchSourcePack(SourcePack):
         keywords: list[str],
         settings: Settings,
     ) -> list[Citation]:
-        citations: list[Citation] = []
+        serper_sem = asyncio.Semaphore(5)
+        fetch_sem = asyncio.Semaphore(10)
 
-        for query in queries:
-            try:
-                if settings.has_serper:
-                    results = await _serper_search(
-                        query, settings.serper_api_key, settings.search_recency,
-                    )
-                else:
-                    results = await _duckduckgo_search(query)
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"User-Agent": "PainRadar/0.1 (research tool)"},
+        ) as client:
 
-                # Fetch and snapshot each result
-                async with httpx.AsyncClient(
-                    timeout=15.0,
-                    follow_redirects=True,
-                    headers={"User-Agent": "PainRadar/0.1 (research tool)"},
-                ) as client:
-                    for result in results[:5]:  # Top 5 per query
+            async def _run_query(query: str) -> list[Citation]:
+                query_citations: list[Citation] = []
+                try:
+                    if settings.has_serper:
+                        async with serper_sem:
+                            results = await _serper_search(
+                                query, settings.serper_api_key,
+                                settings.search_recency, client=client,
+                            )
+                    else:
+                        results = await _duckduckgo_search(query)
+
+                    async def _fetch_one(result: dict) -> Citation | None:
                         url = result.get("link") or result.get("url", "")
                         if not url:
-                            continue
-
-                        snapshot = await fetch_and_store(
-                            url, settings.snapshots_dir, client
-                        )
+                            return None
+                        async with fetch_sem:
+                            snapshot = await fetch_and_store(
+                                url, settings.snapshots_dir, client
+                            )
                         if not snapshot:
-                            continue
-
-                        # Use the search snippet as a pointer, but the real
-                        # evidence must come from the snapshot via LLM extraction.
-                        # For now, store the snippet as the initial excerpt.
+                            return None
                         snippet = result.get("snippet", "")
                         if snippet and snippet in snapshot.raw_text:
-                            citations.append(Citation(
+                            return Citation(
                                 url=url,
                                 excerpt=snippet,
                                 source_type=SourceType.WEB,
@@ -68,20 +69,39 @@ class WebSearchSourcePack(SourcePack):
                                 date_retrieved=datetime.now(timezone.utc).isoformat(),
                                 recency_months=None,
                                 snapshot_hash=snapshot.content_hash,
-                            ))
+                            )
+                        return None
 
-            except Exception:
-                logger.exception(f"Web search failed for query: {query}")
+                    fetched = await asyncio.gather(
+                        *[_fetch_one(r) for r in results[:5]]
+                    )
+                    query_citations = [c for c in fetched if c is not None]
 
+                except Exception:
+                    logger.exception(f"Web search failed for query: {query}")
+
+                return query_citations
+
+            all_results = await asyncio.gather(*[_run_query(q) for q in queries])
+
+        citations: list[Citation] = []
+        for batch in all_results:
+            citations.extend(batch)
         return citations
 
 
-async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
+async def _serper_search(
+    query: str, api_key: str, tbs: str = "",
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     """Search via Serper.dev API."""
     payload: dict = {"q": query, "num": 10}
     if tbs:
         payload["tbs"] = tbs
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=10.0)
+    try:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
@@ -90,6 +110,9 @@ async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
         response.raise_for_status()
         data = response.json()
         return data.get("organic", [])
+    finally:
+        if own_client:
+            await client.aclose()
 
 
 async def _duckduckgo_search(query: str) -> list[dict]:

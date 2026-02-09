@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Awaitable, Callable
 from urllib.parse import urlparse
 
 from pain_radar.core.evidence_gate import MAX_RETRIES, validate_output
@@ -91,13 +92,18 @@ async def score_clusters(
     clusters: list[PainCluster],
     citations: list[Citation],
     llm: LLMProvider,
+    on_progress: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> list[PainCluster]:
     """Score each cluster on 7 dimensions. Each score passes evidence gate."""
     evidence_dicts = [c.model_dump() for c in citations]
     evidence_summary = format_evidence_summary(evidence_dicts)
-    scored = []
+    sem = asyncio.Semaphore(4)
+    scored_count = 0
+    counter_lock = asyncio.Lock()
+    total = len(clusters)
 
-    for cluster in clusters:
+    async def _score_one(cluster: PainCluster) -> PainCluster:
+        nonlocal scored_count
         prompt_content = SCORING_USER.format(
             cluster_statement=cluster.statement.text,
             who=cluster.who,
@@ -107,41 +113,47 @@ async def score_clusters(
             evidence_summary=evidence_summary,
         )
 
-        for attempt in range(MAX_RETRIES + 1):
-            try:
-                raw = await llm.complete_json(
-                    system=SCORING_SYSTEM,
-                    messages=[{"role": "user", "content": prompt_content}],
-                    max_tokens=4096,
-                )
-
-                scores = _parse_scores(raw, len(citations), cluster.citation_indices)
-                if scores:
-                    # Compute recency weight from supporting citations
-                    recency_weights = []
-                    for idx in cluster.citation_indices:
-                        if 0 <= idx < len(citations):
-                            w = compute_recency_weight(citations[idx].date_published)
-                            recency_weights.append(w)
-                    avg_recency = (
-                        sum(recency_weights) / len(recency_weights)
-                        if recency_weights
-                        else 0.5
+        async with sem:
+            for attempt in range(MAX_RETRIES + 1):
+                try:
+                    raw = await llm.complete_json(
+                        system=SCORING_SYSTEM,
+                        messages=[{"role": "user", "content": prompt_content}],
+                        max_tokens=4096,
                     )
 
-                    cluster.scores = scores
-                    cluster.confidence = compute_cluster_confidence(
-                        cluster.citation_indices, citations
-                    )
-                    cluster.recency_weight = avg_recency
-                    break
+                    scores = _parse_scores(raw, len(citations), cluster.citation_indices)
+                    if scores:
+                        recency_weights = []
+                        for idx in cluster.citation_indices:
+                            if 0 <= idx < len(citations):
+                                w = compute_recency_weight(citations[idx].date_published)
+                                recency_weights.append(w)
+                        avg_recency = (
+                            sum(recency_weights) / len(recency_weights)
+                            if recency_weights
+                            else 0.5
+                        )
 
-            except Exception:
-                logger.exception(f"Scoring attempt {attempt + 1} failed for cluster {cluster.id}")
+                        cluster.scores = scores
+                        cluster.confidence = compute_cluster_confidence(
+                            cluster.citation_indices, citations
+                        )
+                        cluster.recency_weight = avg_recency
+                        break
 
-        scored.append(cluster)
+                except Exception:
+                    logger.exception(f"Scoring attempt {attempt + 1} failed for cluster {cluster.id}")
 
-    return scored
+        async with counter_lock:
+            scored_count += 1
+            if on_progress:
+                await on_progress(scored_count, total)
+
+        return cluster
+
+    scored = await asyncio.gather(*[_score_one(c) for c in clusters])
+    return list(scored)
 
 
 def _parse_scores(raw: dict, pack_size: int, fallback_indices: list[int]) -> ClusterScores | None:

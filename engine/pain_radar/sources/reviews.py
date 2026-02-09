@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
@@ -27,43 +28,42 @@ class ReviewSourcePack(SourcePack):
         keywords: list[str],
         settings: Settings,
     ) -> list[Citation]:
-        citations: list[Citation] = []
+        serper_sem = asyncio.Semaphore(5)
+        fetch_sem = asyncio.Semaphore(10)
 
-        for query in queries:
-            try:
-                # Discover review pages via web search
-                if settings.has_serper:
-                    results = await _serper_search(
-                        query, settings.serper_api_key, settings.search_recency,
-                    )
-                else:
-                    results = await _ddg_search(query)
+        async with httpx.AsyncClient(
+            timeout=15.0,
+            follow_redirects=True,
+            headers={"User-Agent": "PainRadar/0.1 (research tool)"},
+        ) as client:
 
-                # Fetch and snapshot each review page
-                async with httpx.AsyncClient(
-                    timeout=15.0,
-                    follow_redirects=True,
-                    headers={"User-Agent": "PainRadar/0.1 (research tool)"},
-                ) as client:
-                    for result in results[:5]:
+            async def _run_query(query: str) -> list[Citation]:
+                query_citations: list[Citation] = []
+                try:
+                    if settings.has_serper:
+                        async with serper_sem:
+                            results = await _serper_search(
+                                query, settings.serper_api_key,
+                                settings.search_recency, client=client,
+                            )
+                    else:
+                        results = await _ddg_search(query)
+
+                    async def _fetch_one(result: dict) -> list[Citation]:
                         url = result.get("link") or result.get("url", "")
                         if not url:
-                            continue
-
-                        # Only process known review sites
+                            return []
                         if not _is_review_site(url):
-                            continue
-
-                        snapshot = await fetch_and_store(
-                            url, settings.snapshots_dir, client
-                        )
+                            return []
+                        async with fetch_sem:
+                            snapshot = await fetch_and_store(
+                                url, settings.snapshots_dir, client
+                            )
                         if not snapshot:
-                            continue
-
-                        # Extract review-like chunks from snapshot
+                            return []
                         chunks = _extract_review_chunks(snapshot.raw_text)
-                        for chunk in chunks:
-                            citations.append(Citation(
+                        return [
+                            Citation(
                                 url=url,
                                 excerpt=chunk,
                                 source_type=SourceType.REVIEW,
@@ -71,11 +71,26 @@ class ReviewSourcePack(SourcePack):
                                 date_retrieved=datetime.now(timezone.utc).isoformat(),
                                 recency_months=None,
                                 snapshot_hash=snapshot.content_hash,
-                            ))
+                            )
+                            for chunk in chunks
+                        ]
 
-            except Exception:
-                logger.exception(f"Review search failed for query: {query}")
+                    fetched = await asyncio.gather(
+                        *[_fetch_one(r) for r in results[:5]]
+                    )
+                    for batch in fetched:
+                        query_citations.extend(batch)
 
+                except Exception:
+                    logger.exception(f"Review search failed for query: {query}")
+
+                return query_citations
+
+            all_results = await asyncio.gather(*[_run_query(q) for q in queries])
+
+        citations: list[Citation] = []
+        for batch in all_results:
+            citations.extend(batch)
         return citations
 
 
@@ -110,11 +125,17 @@ def _extract_review_chunks(text: str, min_length: int = 40) -> list[str]:
     return chunks[:15]
 
 
-async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
+async def _serper_search(
+    query: str, api_key: str, tbs: str = "",
+    client: httpx.AsyncClient | None = None,
+) -> list[dict]:
     payload: dict = {"q": query, "num": 10}
     if tbs:
         payload["tbs"] = tbs
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=10.0)
+    try:
         response = await client.post(
             "https://google.serper.dev/search",
             headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
@@ -122,6 +143,9 @@ async def _serper_search(query: str, api_key: str, tbs: str = "") -> list[dict]:
         )
         response.raise_for_status()
         return response.json().get("organic", [])
+    finally:
+        if own_client:
+            await client.aclose()
 
 
 async def _ddg_search(query: str) -> list[dict]:

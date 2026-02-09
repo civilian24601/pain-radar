@@ -141,6 +141,8 @@ export interface JobProgress {
   source_packs_done: number;
   citations_found: number;
   current_action: string;
+  pack_status?: Record<string, string>;
+  scoring_progress?: string;
 }
 
 export interface ResearchReport {

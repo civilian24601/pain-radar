@@ -284,6 +284,8 @@ class JobProgress(BaseModel):
     source_packs_done: int = 0
     citations_found: int = 0
     current_action: str = ""
+    pack_status: dict[str, str] = Field(default_factory=dict)
+    scoring_progress: str = ""
 
 
 # ---------------------------------------------------------------------------

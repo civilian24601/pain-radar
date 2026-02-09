@@ -64,6 +64,40 @@ export function ResearchProgress({
         </div>
       </div>
 
+      {/* Per-pack status during evidence collection */}
+      {currentStage === "evidence_collection" && progress?.pack_status && Object.keys(progress.pack_status).length > 0 && (
+        <GlassCard>
+          <div className="grid grid-cols-3 gap-3">
+            {(["reddit", "web", "review"] as const).map((pack) => {
+              const status = progress.pack_status?.[pack];
+              const isDone = status?.startsWith("done") || status === "skipped (no queries)";
+              const isFailed = status === "failed";
+              return (
+                <div
+                  key={pack}
+                  className="neu-inset flex flex-col items-center py-3 px-2 gap-1"
+                >
+                  <span className="text-[10px] uppercase tracking-widest text-zinc-500">
+                    {pack}
+                  </span>
+                  <span
+                    className={`text-xs font-mono ${
+                      isDone
+                        ? "text-emerald-400"
+                        : isFailed
+                          ? "text-red-400"
+                          : "text-indigo-400 animate-pulse"
+                    }`}
+                  >
+                    {status || "waiting"}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </GlassCard>
+      )}
+
       {/* Stage timeline + stats */}
       <GlassCard>
         <StageTimeline

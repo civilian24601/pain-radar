@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Awaitable, Callable
 
 from pain_radar.core.models import Citation
 
@@ -42,9 +42,12 @@ async def collect_all_evidence(
     queries: dict[str, list[str]],
     db: Database,
     settings: Settings,
-    progress_callback: Callable[[int, int], None] | None = None,
+    progress_callback: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> tuple[list[Citation], dict[str, object]]:
     """Run all source packs and collect evidence.
+
+    Args:
+        progress_callback: async callable(pack_name, status_message) for live progress.
 
     Returns (citations, snapshots_dict).
     """
@@ -65,14 +68,22 @@ async def collect_all_evidence(
     async def _run_pack(pack: SourcePack) -> list[Citation]:
         pack_queries = queries.get(pack.name, [])
         if not pack_queries:
+            if progress_callback:
+                await progress_callback(pack.name, "skipped (no queries)")
             return []
         try:
+            if progress_callback:
+                await progress_callback(pack.name, f"searching ({len(pack_queries)} queries)")
             logger.info(f"Running source pack: {pack.name} with {len(pack_queries)} queries")
             citations = await pack.search(pack_queries, idea, keywords, settings)
             logger.info(f"Source pack {pack.name} found {len(citations)} citations")
+            if progress_callback:
+                await progress_callback(pack.name, f"done ({len(citations)} citations)")
             return citations
         except Exception:
             logger.exception(f"Source pack {pack.name} failed")
+            if progress_callback:
+                await progress_callback(pack.name, "failed")
             return []
 
     results = await asyncio.gather(*[_run_pack(p) for p in packs])
@@ -80,9 +91,6 @@ async def collect_all_evidence(
     all_citations: list[Citation] = []
     for pack_citations in results:
         all_citations.extend(pack_citations)
-
-    if progress_callback:
-        progress_callback(len(packs), len(all_citations))
 
     # Store snapshots FIRST (citations have FK to snapshots)
     seen_hashes: set[str] = set()
