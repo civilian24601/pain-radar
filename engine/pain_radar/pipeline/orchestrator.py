@@ -62,12 +62,23 @@ class ResearchOrchestrator:
             from pain_radar.llm.base import create_provider
             llm = create_provider(self._settings)
 
+            # Stage 1b: IDEA BRIEF (LLM-generated, with fallback)
+            await self._update_progress(
+                job_id, "intake", current_action="Generating idea brief"
+            )
+            from pain_radar.analysis.intake import generate_idea_brief
+            idea_brief = await generate_idea_brief(idea, options, llm)
+            logger.info(
+                f"IdeaBrief: workflow_verbs={idea_brief.workflow_verbs}, "
+                f"incumbent_tools={idea_brief.incumbent_tools}"
+            )
+
             # Stage 2: QUERY GENERATION
             await self._update_progress(
                 job_id, "query_generation", current_action="Generating search queries"
             )
             from pain_radar.pipeline.query_templates import generate_queries
-            queries = await generate_queries(idea, options, llm)
+            queries = await generate_queries(idea, options, llm, idea_brief=idea_brief)
 
             # Stage 3: EVIDENCE COLLECTION
             await self._update_progress(
@@ -120,7 +131,6 @@ class ResearchOrchestrator:
                 from pain_radar.core.models import (
                     EvidencedClaim,
                     EvidenceQualityMetrics,
-                    IdeaBrief,
                     PayabilityAssessment,
                     ResearchReport,
                     ValidationPlan,
@@ -179,15 +189,6 @@ class ResearchOrchestrator:
                         f"Evidence collection with >{relevance_threshold:.0%} relevance ratio "
                         "showing real pain signals in the target domain"
                     ),
-                )
-
-                idea_brief = IdeaBrief(
-                    raw_idea=idea,
-                    one_liner=idea[:200],
-                    buyer_persona=options.get("buyer_role") or "Unknown",
-                    workflow_replaced="Unknown",
-                    moment_of_pain="Unknown",
-                    keywords=keywords or ["unknown"],
                 )
 
                 report = ResearchReport(
@@ -251,7 +252,7 @@ class ResearchOrchestrator:
             )
 
             from pain_radar.analysis.clustering import cluster_evidence
-            clusters = await cluster_evidence(analysis_citations, idea, options, llm)
+            clusters = await cluster_evidence(analysis_citations, idea, options, llm, idea_brief=idea_brief)
 
             await self._update_progress(
                 job_id, "analysis",
@@ -294,7 +295,6 @@ class ResearchOrchestrator:
                     from pain_radar.core.models import (
                         EvidencedClaim,
                         EvidenceQualityMetrics,
-                        IdeaBrief,
                         PayabilityAssessment,
                         ResearchReport,
                         ValidationPlan,
@@ -360,15 +360,6 @@ class ResearchOrchestrator:
                         ),
                     )
 
-                    idea_brief = IdeaBrief(
-                        raw_idea=idea,
-                        one_liner=idea[:200],
-                        buyer_persona=options.get("buyer_role") or "Unknown",
-                        workflow_replaced="Unknown",
-                        moment_of_pain="Unknown",
-                        keywords=keywords or ["unknown"],
-                    )
-
                     report = ResearchReport(
                         id=job_id,
                         idea_brief=idea_brief,
@@ -402,7 +393,7 @@ class ResearchOrchestrator:
                 current_action="Analyzing competitors",
             )
             from pain_radar.analysis.clustering import extract_competitors
-            competitors = await extract_competitors(analysis_citations, idea, options, llm)
+            competitors = await extract_competitors(analysis_citations, idea, options, llm, idea_brief=idea_brief)
 
             from pain_radar.analysis.scoring import assess_payability
             payability = await assess_payability(analysis_citations, idea, llm)
@@ -434,6 +425,28 @@ class ResearchOrchestrator:
             from pain_radar.analysis.verdict import enforce_verdict_payability_consistency
             payability = enforce_verdict_payability_consistency(verdict, payability)
 
+            # Compute display rewrites (render-time only — raw text unchanged)
+            from pain_radar.core.evidence_gate import (
+                compute_display_rewrites,
+                compute_frequency_downgrades,
+            )
+            rewrite_notes: list[str] = []
+            # Scan verdict reasons/risks for absence claims and frequency adverbs
+            for claim in verdict.reasons + verdict.risks:
+                abs_rewrites = compute_display_rewrites(claim.text)
+                for rw in abs_rewrites:
+                    rewrite_notes.append(
+                        f"[absence rewrite] '{rw['original']}' → '{rw['rewritten']}'"
+                    )
+                freq_downgrades = compute_frequency_downgrades(claim, analysis_citations)
+                for dg in freq_downgrades:
+                    rewrite_notes.append(
+                        f"[frequency downgrade] '{dg['original_word']}' → "
+                        f"'{dg['replacement']}' ({dg['unique_urls']} unique URLs)"
+                    )
+            if rewrite_notes:
+                verdict.evidence_quality_notes.extend(rewrite_notes)
+
             # Stage 7: VALIDATION PLAN
             await self._update_progress(
                 job_id, "validation_plan",
@@ -454,18 +467,8 @@ class ResearchOrchestrator:
             )
             from pain_radar.analysis.skeptic import run_skeptic_pass
 
-            # Build idea brief
-            from pain_radar.core.models import IdeaBrief, ResearchReport
-            idea_brief = IdeaBrief(
-                raw_idea=idea,
-                one_liner=idea[:200],
-                buyer_persona=options.get("buyer_role") or "Unknown",
-                workflow_replaced="Unknown",
-                moment_of_pain="Unknown",
-                keywords=queries.get("_keywords") or ["unknown"],
-            )
-
             # Assemble report for skeptic pass (full citations in evidence_pack)
+            from pain_radar.core.models import ResearchReport
             report = ResearchReport(
                 id=job_id,
                 idea_brief=idea_brief,

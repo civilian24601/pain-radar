@@ -5,7 +5,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
-from pain_radar.core.evidence_gate import MAX_RETRIES
+from pain_radar.core.evidence_gate import (
+    MAX_RETRIES,
+    auto_populate_excerpts,
+    validate_and_fix_excerpts,
+)
 from pain_radar.core.models import (
     Citation,
     Competitor,
@@ -83,14 +87,14 @@ async def generate_verdict(
     evidence_summary = format_evidence_summary(evidence_dicts)
 
     clusters_summary = "\n".join(
-        f"- [{c.id}] {c.statement.text} | frequency={c.scores.frequency.score} "
+        f"- [{c.id}] [{c.category.value}] {c.statement.text} | frequency={c.scores.frequency.score} "
         f"severity={c.scores.severity.score} payability={c.scores.payability.score} "
         f"confidence={c.confidence:.2f} recency={c.recency_weight:.2f}"
         for c in clusters
     )
 
     competitors_summary = "\n".join(
-        f"- {c.name}: pricing_page={c.pricing_page_exists}, "
+        f"- {c.name} [{c.relationship.value}]: pricing_page={c.pricing_page_exists}, "
         f"min_price={c.min_price_observed or 'unknown'}, "
         f"onboarding={c.onboarding_model.value}"
         for c in competitors
@@ -173,12 +177,39 @@ def _parse_verdict(
                     text = item.get("text", "")
                     indices = [i for i in item.get("citation_indices", []) if 0 <= i < pack_size]
                     if text and indices:
-                        claims.append(EvidencedClaim(text=text, citation_indices=indices))
+                        # Parse evidence_excerpts from LLM output
+                        raw_excerpts = item.get("evidence_excerpts", [])
+                        if not isinstance(raw_excerpts, list):
+                            raw_excerpts = []
+                        excerpts = [str(e) for e in raw_excerpts if e]
+
+                        claim = EvidencedClaim(
+                            text=text,
+                            citation_indices=indices,
+                            evidence_excerpts=excerpts,
+                        )
+
+                        # Validate or auto-populate excerpts
+                        if claim.evidence_excerpts and _citations:
+                            claim.evidence_excerpts = validate_and_fix_excerpts(
+                                claim, _citations
+                            )
+                        if not claim.evidence_excerpts and _citations:
+                            claim.evidence_excerpts = auto_populate_excerpts(
+                                claim, _citations
+                            )
+
+                        claims.append(claim)
                 elif isinstance(item, str) and item.strip():
-                    claims.append(EvidencedClaim(
+                    claim = EvidencedClaim(
                         text=item,
                         citation_indices=_match_citation_to_text(item, _citations),
-                    ))
+                    )
+                    if _citations:
+                        claim.evidence_excerpts = auto_populate_excerpts(
+                            claim, _citations
+                        )
+                    claims.append(claim)
             return claims
 
         reasons = parse_claims("reasons")

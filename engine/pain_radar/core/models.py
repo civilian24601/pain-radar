@@ -41,6 +41,17 @@ class OnboardingModel(str, Enum):
     UNKNOWN = "unknown"
 
 
+class ClusterCategory(str, Enum):
+    CORE = "core"         # idea-specific, eligible for wedge/verdict
+    CONTEXT = "context"   # cross-domain driver, informs urgency/payability but not wedge
+
+
+class CompetitorRelationship(str, Enum):
+    DIRECT = "direct"         # same workflow, same ICP
+    SUBSTITUTE = "substitute" # different approach, same outcome
+    ADJACENT = "adjacent"     # related but different workflow
+
+
 class VerdictDecision(str, Enum):
     KILL = "KILL"
     NARROW = "NARROW"
@@ -83,6 +94,7 @@ class EvidencedClaim(BaseModel):
 
     text: str
     citation_indices: list[int] = Field(..., min_length=1)
+    evidence_excerpts: list[str] = Field(default_factory=list)  # verbatim from cited evidence (optional, backward-compatible)
 
     @field_validator("citation_indices")
     @classmethod
@@ -132,6 +144,7 @@ class PainCluster(BaseModel):
     scores: ClusterScores
     confidence: float = Field(..., ge=0.0, le=1.0)
     recency_weight: float = Field(..., ge=0.0, le=1.0)
+    category: ClusterCategory = ClusterCategory.CORE
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +162,7 @@ class Competitor(BaseModel):
     strengths: list[EvidencedClaim]
     weaknesses: list[EvidencedClaim]
     citation_indices: list[int] = Field(..., min_length=1)
+    relationship: CompetitorRelationship = CompetitorRelationship.ADJACENT
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +256,8 @@ class IdeaBrief(BaseModel):
     workflow_replaced: str
     moment_of_pain: str
     keywords: list[str] = Field(..., min_length=1, max_length=10)
+    workflow_verbs: list[str] = Field(default_factory=list)  # e.g. ["text photo of receipt", "re-key into QuickBooks"]
+    incumbent_tools: list[str] = Field(default_factory=list)  # e.g. ["QuickBooks", "Dext"]
 
 
 # ---------------------------------------------------------------------------

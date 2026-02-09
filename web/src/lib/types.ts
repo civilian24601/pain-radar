@@ -3,6 +3,8 @@
 export type SourceType = "reddit" | "review" | "competitor" | "job_post" | "web";
 export type OnboardingModel = "self_serve" | "sales_led" | "unknown";
 export type VerdictDecision = "KILL" | "NARROW" | "ADVANCE" | "INSUFFICIENT_EVIDENCE";
+export type ClusterCategory = "core" | "context";
+export type CompetitorRelationship = "direct" | "substitute" | "adjacent";
 export type JobStatus =
   | "created"
   | "clarifying"
@@ -25,6 +27,7 @@ export interface Citation {
 export interface EvidencedClaim {
   text: string;
   citation_indices: number[];
+  evidence_excerpts?: string[];
 }
 
 export interface ScoredDimension {
@@ -52,6 +55,7 @@ export interface PainCluster {
   scores: ClusterScores;
   confidence: number;
   recency_weight: number;
+  category?: ClusterCategory;
 }
 
 export interface Competitor {
@@ -62,6 +66,7 @@ export interface Competitor {
   target_icp: EvidencedClaim | null;
   onboarding_model: OnboardingModel;
   positioning: string;
+  relationship?: CompetitorRelationship;
   strengths: EvidencedClaim[];
   weaknesses: EvidencedClaim[];
   citation_indices: number[];

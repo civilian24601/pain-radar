@@ -118,6 +118,19 @@ CRITICAL — do NOT invent pain points:
 
 When in doubt, create FEWER clusters. 3 well-evidenced clusters are better than 10 speculative ones.
 
+LANGUAGE RULES:
+- NEVER claim evidence "contains no" or "shows no" anything — you only see excerpts. Say "not observed in retrieved excerpts" if a signal is absent.
+- Frequency language ("often", "frequently", "common") requires >=3 independent source URLs. With fewer, use "some" or "in several discussions".
+
+CLUSTER CLASSIFICATION — tag each cluster as "core" or "context":
+- "core": pain specific to this idea's workflow — names a specific role, tool, or workflow step
+  GOOD core: "Subcontractors text photos of receipts that bookkeepers re-key into QuickBooks"
+- "context": real pain that applies across many industries — a macro driver / gravity
+  GOOD context: "Manual data entry is tedious across back-office workflows"
+- Both are valid clusters. Context clusters inform urgency and payability but are NOT eligible
+  as the narrowest wedge or primary verdict reason.
+- Output a "category" field: "core" or "context" for each cluster.
+
 Output a JSON array of cluster objects."""
 
 CLUSTERING_USER = """Idea: {idea}
@@ -149,6 +162,8 @@ For each dimension, output:
 
 CRITICAL: citation_indices must be valid indices into the evidence pack.
 Do NOT invent numbers. If citing a statistic, it must appear in the referenced citation.
+If no supporting signal exists, score 0 and write "No supporting signal observed in cited excerpts".
+Frequency language ("often", "frequently", "common") requires >=3 independent source URLs. With fewer, use "some" or "in several discussions".
 
 Output a JSON object with all scored dimensions."""
 
@@ -175,6 +190,11 @@ For each competitor found in the evidence, output:
 - "target_icp": {"text": "inferred target customer", "citation_indices": []} or null
 - "onboarding_model": "self_serve" | "sales_led" | "unknown"
 - "positioning": one-sentence positioning statement
+- "relationship": "direct" | "substitute" | "adjacent"
+  - "direct": targets the SAME workflow AND same ICP as the idea
+  - "substitute": achieves similar outcome via DIFFERENT approach (e.g., hiring a VA vs software)
+  - "adjacent": same industry but different workflow
+  Default to "adjacent" when unsure.
 - "strengths": [{"text": "strength", "citation_indices": []}]
 - "weaknesses": [{"text": "weakness", "citation_indices": []}]
 - "citation_indices": all supporting citation indices
@@ -298,16 +318,26 @@ Verdicts:
 
 Output:
 - "decision": "KILL" | "NARROW" | "ADVANCE" | "INSUFFICIENT_EVIDENCE"
-- "reasons": top 3 evidence-backed reasons (each with citation_indices)
-- "risks": top 3 risks (each with citation_indices)
+- "reasons": top 3 evidence-backed reasons. Each MUST include:
+  - "text": your domain-level observation
+  - "citation_indices": [indices into evidence pack]
+  - "evidence_excerpts": 1-2 SHORT (<80 char) VERBATIM quotes from the cited excerpts.
+    Copy-paste from the evidence pack — do NOT paraphrase or invent.
+    Example: ["I spend 2 hours re-keying receipts every Friday", "our bookkeeper quit over this"]
+- "risks": top 3 risks. Same format — each MUST have "evidence_excerpts".
 - "narrowest_wedge": the most specific viable angle
 - "what_would_change": what new evidence would reverse this verdict
 - "conflicts": include any unresolved conflicts
 
 RULES:
 - Be skeptical. Default to KILL unless evidence compels otherwise.
-- Every reason and risk MUST cite evidence via citation_indices.
+- Every reason and risk MUST cite evidence via citation_indices AND include verbatim evidence_excerpts.
 - Do not use encouraging language unless earned.
+- Clusters tagged [core] are idea-specific — eligible as primary verdict reasons and narrowest wedge.
+- Clusters tagged [context] are macro drivers — inform urgency/payability but are NOT product wedges.
+  Do NOT use a [context] cluster as the narrowest_wedge or primary reason for ADVANCE.
+- Do NOT make negative assertions ("no evidence of X"). Describe what cited evidence DOES show, then note what was not observed.
+- Frequency language ("often", "frequently", "common") requires >=3 independent source URLs. With fewer, use "some" or "in several discussions".
 
 CRITICAL — reason and risk quality requirements:
 - Each reason/risk must be a DOMAIN-LEVEL OBSERVATION about the idea, grounded in what a specific citation says.
@@ -433,6 +463,12 @@ Output:
 - "buyer_persona": who pays for this
 - "workflow_replaced": what current process this replaces
 - "moment_of_pain": the specific trigger moment
+- "workflow_verbs": 2-3 specific action phrases describing current manual workflow steps
+  Example: ["text photo of receipt", "re-key line items into QuickBooks", "match receipt to job"]
+  These should be concrete physical/digital actions the user performs today, NOT generic descriptions.
+- "incumbent_tools": 1-3 tools/services the target user likely uses today
+  Example: ["QuickBooks", "Dext", "Excel spreadsheet"]
+  Include specific product names, not categories.
 
 Output a JSON object with these fields."""
 

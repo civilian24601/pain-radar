@@ -251,29 +251,75 @@ export function ReportView({ report }: Props) {
       {/* ─── Pain Map ─────────────────────────────────── */}
       <motion.div variants={fadeUp}>
         <GlassCard padding={false}>
-          <AnimatedCollapsible
-            title={`Pain Map (${report.pain_map.length} clusters)`}
-            defaultOpen
-          >
-            <div className="space-y-3">
-              {[...report.pain_map]
-                .sort((a, b) => {
-                  const s = (c: PainCluster) =>
-                    c.scores.frequency.score +
-                    c.scores.severity.score +
-                    c.scores.payability.score;
-                  return s(b) - s(a);
-                })
-                .map((cluster, i) => (
-                  <ClusterCard
-                    key={cluster.id}
-                    cluster={cluster}
-                    citations={report.evidence_pack}
-                    rank={i + 1}
-                  />
-                ))}
-            </div>
-          </AnimatedCollapsible>
+          {(() => {
+            const coreClusters = report.pain_map.filter(
+              (c) => c.category !== "context"
+            );
+            const contextClusters = report.pain_map.filter(
+              (c) => c.category === "context"
+            );
+            const sortByScore = (a: PainCluster, b: PainCluster) => {
+              const s = (c: PainCluster) =>
+                c.scores.frequency.score +
+                c.scores.severity.score +
+                c.scores.payability.score;
+              return s(b) - s(a);
+            };
+
+            return (
+              <>
+                <AnimatedCollapsible
+                  title={`Pain Map (${coreClusters.length} core cluster${coreClusters.length !== 1 ? "s" : ""})`}
+                  defaultOpen
+                >
+                  <div className="space-y-3">
+                    {[...coreClusters].sort(sortByScore).map((cluster, i) => (
+                      <ClusterCard
+                        key={cluster.id}
+                        cluster={cluster}
+                        citations={report.evidence_pack}
+                        rank={i + 1}
+                      />
+                    ))}
+                    {coreClusters.length === 0 && (
+                      <p className="text-sm text-zinc-500">
+                        No idea-specific pain clusters found.
+                      </p>
+                    )}
+                  </div>
+                </AnimatedCollapsible>
+
+                {contextClusters.length > 0 && (
+                  <div className="border-t border-zinc-800/40">
+                    <AnimatedCollapsible
+                      title={
+                        <span className="text-zinc-500">
+                          Macro Drivers ({contextClusters.length})
+                        </span>
+                      }
+                    >
+                      <p className="text-xs text-zinc-600 mb-3">
+                        Cross-domain pains that inform urgency and payability
+                        but are not product wedges.
+                      </p>
+                      <div className="space-y-3 opacity-80">
+                        {[...contextClusters]
+                          .sort(sortByScore)
+                          .map((cluster, i) => (
+                            <ClusterCard
+                              key={cluster.id}
+                              cluster={cluster}
+                              citations={report.evidence_pack}
+                              rank={coreClusters.length + i + 1}
+                            />
+                          ))}
+                      </div>
+                    </AnimatedCollapsible>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </GlassCard>
       </motion.div>
 
@@ -385,20 +431,34 @@ function ClaimList({
   citations: Citation[];
 }) {
   return (
-    <ul className="space-y-2">
+    <ul className="space-y-3">
       {claims.map((claim, i) => (
-        <li key={i} className="text-sm text-zinc-300 leading-relaxed">
-          {claim.text}
-          <span className="ml-1.5 inline-flex gap-1">
-            {claim.citation_indices.map((idx) => (
-              <CitationChip
-                key={idx}
-                index={idx}
-                url={citations[idx]?.url || "#"}
-                excerpt={citations[idx]?.excerpt}
-              />
-            ))}
-          </span>
+        <li key={i}>
+          <p className="text-sm text-zinc-300 leading-relaxed">
+            {claim.text}
+            <span className="ml-1.5 inline-flex gap-1">
+              {claim.citation_indices.map((idx) => (
+                <CitationChip
+                  key={idx}
+                  index={idx}
+                  url={citations[idx]?.url || "#"}
+                  excerpt={citations[idx]?.excerpt}
+                />
+              ))}
+            </span>
+          </p>
+          {claim.evidence_excerpts && claim.evidence_excerpts.length > 0 && (
+            <div className="mt-1.5 ml-3 space-y-1">
+              {claim.evidence_excerpts.map((excerpt, ei) => (
+                <p
+                  key={ei}
+                  className="neu-inset rounded-lg px-3 py-1.5 text-xs italic text-zinc-400 leading-relaxed"
+                >
+                  &ldquo;{excerpt}&rdquo;
+                </p>
+              ))}
+            </div>
+          )}
         </li>
       ))}
     </ul>
@@ -451,6 +511,11 @@ function ClusterCard({
           </p>
           <div className="flex items-center gap-3 mt-1.5">
             <span className="text-xs text-zinc-500">{cluster.who}</span>
+            {cluster.category === "context" && (
+              <span className="rounded-full bg-zinc-700/50 px-2 py-0.5 text-[10px] text-zinc-500">
+                macro driver
+              </span>
+            )}
             {/* Confidence bar */}
             <div className="flex items-center gap-1.5 flex-1 max-w-[120px]">
               <div className="flex-1 h-1 rounded-full bg-zinc-800 overflow-hidden">
@@ -565,7 +630,20 @@ function CompetitorCard({
       <p className="text-xs text-zinc-500 mb-2 line-clamp-2">
         {competitor.positioning}
       </p>
-      <div className="flex items-center gap-2 text-xs">
+      <div className="flex items-center gap-2 text-xs flex-wrap">
+        {competitor.relationship && (
+          <span
+            className={`rounded-full px-2 py-0.5 font-medium ${
+              competitor.relationship === "direct"
+                ? "bg-red-400/10 text-red-400 border border-red-400/20"
+                : competitor.relationship === "substitute"
+                  ? "bg-amber-400/10 text-amber-400 border border-amber-400/20"
+                  : "bg-zinc-700/50 text-zinc-500 border border-zinc-600/30"
+            }`}
+          >
+            {competitor.relationship}
+          </span>
+        )}
         {competitor.min_price_observed && (
           <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-zinc-400">
             {competitor.min_price_observed}

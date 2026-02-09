@@ -56,6 +56,19 @@ TOOLS_REALITY_TEMPLATES = [
     '"{keyword}" alternative to OR replacement for',
 ]
 
+# Workflow-specific templates — expanded with IdeaBrief.workflow_verbs
+WORKFLOW_TEMPLATES = [
+    '"{verb}" site:reddit.com',
+    '"{verb}" "{tool}"',
+    '"{verb}" frustrating OR tedious OR manual',
+]
+
+# Incumbent tool templates — expanded with IdeaBrief.incumbent_tools
+INCUMBENT_TOOL_TEMPLATES = [
+    '"{tool}" complaints OR issues OR workaround',
+    '"{tool}" "{keyword}" pain OR problem',
+]
+
 # ---------------------------------------------------------------------------
 # Niche-specific templates — activated by keyword match on niche/idea
 # ---------------------------------------------------------------------------
@@ -107,8 +120,12 @@ async def generate_queries(
     idea: str,
     options: dict,
     llm: LLMProvider,
+    idea_brief: object | None = None,
 ) -> dict[str, list[str]]:
     """Generate search queries: deterministic templates + LLM refinement.
+
+    If idea_brief is provided (with workflow_verbs/incumbent_tools), also expands
+    workflow-specific and incumbent-tool templates for higher-quality evidence.
 
     Returns dict with keys: "reddit", "web", "review", "hiring", "_keywords", "_idea"
     """
@@ -149,6 +166,50 @@ async def generate_queries(
 
     # Step 2b: Add tools/reality templates to web pack (all ideas)
     queries["web"].extend(_expand_templates(TOOLS_REALITY_TEMPLATES, keywords))
+
+    # Step 2b2: Add workflow-specific + incumbent-tool queries if IdeaBrief available
+    workflow_verbs = getattr(idea_brief, "workflow_verbs", []) if idea_brief else []
+    incumbent_tools = getattr(idea_brief, "incumbent_tools", []) if idea_brief else []
+
+    if workflow_verbs:
+        for verb in workflow_verbs[:3]:
+            for tmpl in WORKFLOW_TEMPLATES:
+                if "{tool}" in tmpl and incumbent_tools:
+                    for tool in incumbent_tools[:3]:
+                        queries.setdefault("reddit", []).append(
+                            tmpl.replace("{verb}", verb).replace("{tool}", tool)
+                        )
+                        queries.setdefault("web", []).append(
+                            tmpl.replace("{verb}", verb).replace("{tool}", tool)
+                        )
+                elif "{tool}" not in tmpl:
+                    queries.setdefault("reddit", []).append(
+                        tmpl.replace("{verb}", verb)
+                    )
+                    queries.setdefault("web", []).append(
+                        tmpl.replace("{verb}", verb)
+                    )
+        logger.info(f"Added workflow-specific queries for verbs: {workflow_verbs[:3]}")
+
+    if incumbent_tools:
+        for tool in incumbent_tools[:3]:
+            for tmpl in INCUMBENT_TOOL_TEMPLATES:
+                if "{keyword}" in tmpl:
+                    for kw in keywords[:2]:
+                        queries.setdefault("web", []).append(
+                            tmpl.replace("{tool}", tool).replace("{keyword}", kw)
+                        )
+                        queries.setdefault("review", []).append(
+                            tmpl.replace("{tool}", tool).replace("{keyword}", kw)
+                        )
+                else:
+                    queries.setdefault("web", []).append(
+                        tmpl.replace("{tool}", tool)
+                    )
+                    queries.setdefault("review", []).append(
+                        tmpl.replace("{tool}", tool)
+                    )
+        logger.info(f"Added incumbent tool queries for: {incumbent_tools[:3]}")
 
     # Step 2c: Add niche-specific templates if niche/idea matches
     niche_text = f"{niche} {idea}".lower()
